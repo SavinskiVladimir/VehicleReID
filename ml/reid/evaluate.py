@@ -44,8 +44,8 @@ from torchvision import transforms
 
 # Переиспользуем парсер имени файла VeRi-776 (vehicle_id, camera_id)
 # из датасет-модуля, чтобы не дублировать regex в двух местах.
-from reid.datasets.veri_dataset import _parse_filename
-from reid.models.efficientnetv2_reid import VehicleReIDNet
+from ml.reid.datasets.veri_dataset import _parse_filename
+from ml.reid.models.efficientnetv2_reid import VehicleReIDNet
 
 
 _IMAGENET_MEAN = [0.485, 0.456, 0.406]
