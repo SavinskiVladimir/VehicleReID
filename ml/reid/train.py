@@ -37,10 +37,10 @@ from torch.optim.lr_scheduler import MultiStepLR
 from torch.utils.data import DataLoader
 from torchvision import transforms
 
-from datasets.veri_dataset import VeRi776, VeRiImageDataset
-from samplers.pk_sampler import PKSampler
-from models.efficientnetv2_reid import VehicleReIDNet
-from losses.triplet import BatchHardTripletLoss
+from reid.datasets.veri_dataset import VeRi776, VeRiImageDataset
+from reid.samplers.pk_sampler import PKSampler
+from reid.models.efficientnetv2_reid import VehicleReIDNet
+from reid.losses.triplet import BatchHardTripletLoss
 
 
 # ---------------------------------------------------------------------------
