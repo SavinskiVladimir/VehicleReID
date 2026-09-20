@@ -1,0 +1,42 @@
+name: Tests
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: ["**"]
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout код
+        uses: actions/checkout@v4
+
+      - name: Настройка Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Кэш pip-пакетов
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('requirements-test.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      # CPU-only сборка PyTorch: в CI нет GPU, а CPU-версия значительно
+      # легче и быстрее скачивается, чем полная CUDA-сборка по умолчанию.
+      - name: Установка PyTorch (CPU-only)
+        run: |
+          pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+
+      - name: Установка остальных зависимостей
+        run: |
+          pip install -r requirements-test.txt
+
+      - name: Запуск тестов
+        run: |
+          pytest -v
