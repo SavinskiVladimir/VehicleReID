@@ -1,5 +1,21 @@
+# Зависимости для запуска тестового набора (pytest tests/).
+# torch/torchvision ставятся отдельным шагом в CI (CPU-only wheels,
+# см. .github/workflows/tests.yml) - здесь не перечислены, чтобы CI не
+# тянул полную CUDA-версию по умолчанию.
+
 pytest>=7.0
+pytest-asyncio>=0.23
 ultralytics
 pillow
 pyyaml
 numpy
+
+# Backend: слой хранения (pgvector) и API-схемы (pydantic) -
+# нужны для тестов backend/app/db/*, backend/app/schemas/*,
+# backend/app/services/* (search_service.py, reid_embedder.py)
+sqlalchemy>=2.0
+asyncpg
+pgvector
+pydantic>=2.0
+onnxruntime
+python-dotenv

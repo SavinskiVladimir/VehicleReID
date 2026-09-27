@@ -1,0 +1,24 @@
+# Итоговый стек согласно разделу 2.3 "Обоснование выбора инструментов
+# реализации" (FastAPI + Uvicorn + Pydantic, PostgreSQL + pgvector,
+# ONNX Runtime для инференса моделей).
+
+# Web-фреймворк
+fastapi>=0.110
+uvicorn[standard]>=0.29
+python-multipart>=0.0.9   # для приёма файлов (загрузка изображений) через FastAPI
+
+# Валидация данных
+pydantic>=2.0
+
+# Хранилище данных
+sqlalchemy>=2.0
+asyncpg>=0.29
+pgvector>=0.2
+
+# ML-инференс на сервере (см. docstring backend/app/services/*.py -
+# осознанно БЕЗ полного torch/ultralytics в serving-пути, кроме
+# детектора, где ultralytics.YOLO нужен и для .onnx, и для .pt)
+onnxruntime>=1.17
+ultralytics>=8.4
+pillow>=10.0
+numpy>=1.26

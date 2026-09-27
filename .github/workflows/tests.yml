@@ -10,6 +10,28 @@ jobs:
   pytest:
     runs-on: ubuntu-latest
 
+    # Сервис-контейнер PostgreSQL с расширением pgvector - нужен для
+    # интеграционных тестов backend/app/db/repository.py
+    # (tests/test_repository.py), которые проверяют реальные SQL-запросы
+    # (в т.ч. оператор косинусного расстояния pgvector), а не моки.
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: testuser
+          POSTGRES_PASSWORD: testpass
+          POSTGRES_DB: testdb
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      TEST_DATABASE_URL: postgresql+asyncpg://testuser:testpass@localhost:5432/testdb
+
     steps:
       - name: Checkout код
         uses: actions/checkout@v4
@@ -36,6 +58,10 @@ jobs:
       - name: Установка остальных зависимостей
         run: |
           pip install -r requirements-test.txt
+
+      - name: Включение расширения vector в тестовой БД
+        run: |
+          PGPASSWORD=testpass psql -h localhost -U testuser -d testdb -c "CREATE EXTENSION IF NOT EXISTS vector;"
 
       - name: Запуск тестов
         run: |

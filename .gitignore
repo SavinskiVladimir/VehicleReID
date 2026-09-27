@@ -1,2 +1,3 @@
 /ml/reid/checkpoints/best_checkpoint.pt
 /ml/detection/runs/vehicle_detector/weights/best.pt
+/.env
