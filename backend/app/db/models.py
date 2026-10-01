@@ -55,7 +55,7 @@ class Observation(Base):
     # файлов (локальная ФС / S3-совместимое хранилище) вынесено за
     # пределы этой модели - здесь фиксируется только путь.
     image_path: Mapped[str] = mapped_column(String, nullable=False)
-    crop_path: Mapped[str] = mapped_column(String, nullable=False)
+    crop_path: Mapped[str] = mapped_column(String, nullable=False, unique=True, index=True)
 
     # Координаты ограничивающего прямоугольника на ИСХОДНОМ изображении
     # (не на кропе) - чтобы можно было восстановить, откуда именно
