@@ -105,22 +105,32 @@ async def main() -> None:
             print("База очищена.")
 
         added = 0
-        added = 0
-        skipped = 0
+
+        # Первый проход: определяем, какие изображения уже есть в БД.
+        print("Проверяю существующие изображения...")
+
+        new_images = []
 
         for path in selected:
             image_path = os.path.abspath(path)
 
-            # Если изображение уже есть в БД — пропускаем его.
-            # Это позволяет безопасно перезапустить скрипт после остановки.
             if await repository.observation_exists(session, image_path):
-                skipped += 1
-                print(f"  Пропускаю уже существующее: {path}")
                 continue
 
+            new_images.append(path)
+
+        skipped = len(selected) - len(new_images)
+
+        print(f"Пропускаю {skipped} уже существующих изображений.")
+        print(f"Начинаю загрузку {len(new_images)} новых изображений...")
+
+        # Второй проход: обрабатываем только новые изображения.
+        for path in new_images:
             image = Image.open(path).convert("RGB")
             preprocessed = image_service.preprocess(image)
             embedding = embedder.embed_as_list(preprocessed)
+
+            image_path = os.path.abspath(path)
 
             await repository.add_observation(
                 session,
@@ -133,7 +143,7 @@ async def main() -> None:
             added += 1
 
             if added % 50 == 0:
-                print(f"  Добавлено {added}/{len(selected)}...")
+                print(f"  Добавлено {added}/{len(new_images)}...")
 
     await engine.dispose()
     print()
