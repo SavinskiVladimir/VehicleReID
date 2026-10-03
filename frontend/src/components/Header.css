@@ -1,0 +1,48 @@
+.app-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 28px;
+  border-bottom: 1px solid var(--line);
+  background: var(--paper);
+}
+
+.app-header__brand {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 16px;
+  color: var(--ink);
+}
+
+.app-header__brand svg {
+  color: var(--signal);
+}
+
+.app-header__nav {
+  display: flex;
+  gap: 4px;
+}
+
+.app-header__nav button {
+  background: none;
+  border: none;
+  padding: 8px 14px;
+  border-radius: var(--radius-sm);
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--muted);
+  transition: background-color 120ms ease, color 120ms ease;
+}
+
+.app-header__nav button:hover {
+  background: var(--mist);
+  color: var(--ink);
+}
+
+.app-header__nav button.is-active {
+  background: var(--mist-strong);
+  color: var(--signal-dark);
+}

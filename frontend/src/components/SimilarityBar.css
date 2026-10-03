@@ -1,0 +1,28 @@
+.similarity-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.similarity-bar__track {
+  flex: 1;
+  height: 5px;
+  background: var(--mist-strong);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.similarity-bar__fill {
+  height: 100%;
+  background: var(--signal);
+  border-radius: 3px;
+}
+
+.similarity-bar__value {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--ink);
+  width: 38px;
+  text-align: right;
+  flex-shrink: 0;
+}

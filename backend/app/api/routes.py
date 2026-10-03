@@ -29,6 +29,7 @@ ML-обработки и недоступность БД возвращают п
 
 from __future__ import annotations
 
+import logging
 import uuid
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
@@ -51,6 +52,7 @@ from ..services.search_service import SearchService
 from ..storage import FileStorage, UploadNotFoundError, UploadValidationError
 
 router = APIRouter(tags=["vehicles"])
+logger = logging.getLogger(__name__)
 
 
 def _bbox_to_schema(bbox: tuple) -> BoundingBox:
@@ -98,8 +100,10 @@ async def detect_vehicles(
         image = storage.load_temp(upload_id)
         detections = detector.detect(image)
     except Exception:
-        # ТЗ п.1.1.2.4: "корректное сообщение об ошибке без прекращения
-        # работы серверной части" - не пробрасываем сырой traceback.
+        # Полный traceback - в лог сервера (для диагностики), пользователю
+        # - только общее сообщение (ТЗ п.1.1.2.4: "корректное сообщение об
+        # ошибке без прекращения работы серверной части").
+        logger.exception("Ошибка на этапе детекции (upload_id=%s)", upload_id)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Не удалось обработать изображение на этапе детекции.",
@@ -141,6 +145,7 @@ async def search_vehicle(
         # ТЗ п.1.1.2.4: "при недоступности подсистемы хранения и поиска
         # система должна информировать пользователя о временной
         # невозможности выполнения запроса" - 503, а не 500/крах.
+        logger.exception("Ошибка на этапе поиска (upload_id=%s)", body.upload_id)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Сервис поиска временно недоступен. Попробуйте позже.",
@@ -187,6 +192,7 @@ async def add_observation(
             bbox=chosen.bbox,
         )
     except Exception:
+        logger.exception("Ошибка при сохранении наблюдения (upload_id=%s)", body.upload_id)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Не удалось сохранить наблюдение - хранилище временно недоступно.",
@@ -207,6 +213,7 @@ async def get_observation_history(
     try:
         return await search_service.get_history(session, limit=limit, offset=offset)
     except Exception:
+        logger.exception("Ошибка при получении истории наблюдений")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="История наблюдений временно недоступна.",
@@ -227,6 +234,7 @@ async def delete_observation(
     try:
         deleted = await search_service.delete_observation(session, observation_id)
     except Exception:
+        logger.exception("Ошибка при удалении наблюдения (id=%s)", observation_id)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Сервис хранения временно недоступен.",

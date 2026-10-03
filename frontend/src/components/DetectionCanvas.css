@@ -1,0 +1,75 @@
+.detection-canvas {
+  position: relative;
+  width: 100%;
+  background: var(--mist);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  border: 1px solid var(--line);
+}
+
+.detection-canvas img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.detection-canvas__overlay {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+.detection-box rect:first-child {
+  fill: rgba(43, 95, 226, 0.08);
+  stroke: var(--signal);
+  stroke-width: 2.5;
+  cursor: pointer;
+  transition: fill 120ms ease, stroke-width 120ms ease;
+
+  /* Рамки "прорисовываются" при появлении - единственный момент
+     анимации на странице, отвечающий на реальное событие (пришёл
+     результат детекции), а не декоративный fade на каждой карточке. */
+  stroke-dasharray: 2000;
+  stroke-dashoffset: 2000;
+  animation: draw-box 480ms ease forwards;
+}
+
+@keyframes draw-box {
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+
+.detection-box:hover rect:first-child {
+  fill: rgba(43, 95, 226, 0.16);
+}
+
+.detection-box--selected rect:first-child {
+  fill: rgba(43, 95, 226, 0.22);
+  stroke-width: 3.5;
+}
+
+.detection-box__label-bg {
+  fill: var(--signal);
+}
+
+.detection-box--selected .detection-box__label-bg {
+  fill: var(--signal-dark);
+}
+
+.detection-box__label-text {
+  fill: var(--paper);
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-weight: 500;
+  pointer-events: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .detection-box rect:first-child {
+    animation: none;
+    stroke-dashoffset: 0;
+  }
+}

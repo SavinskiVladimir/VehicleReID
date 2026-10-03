@@ -1,0 +1,56 @@
+.history-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.history-table thead th {
+  text-align: left;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--muted);
+  padding: 0 12px 10px;
+  border-bottom: 1px solid var(--line);
+}
+
+.history-table tbody td {
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--line);
+  font-size: 14px;
+  vertical-align: middle;
+}
+
+.history-table__thumb {
+  width: 48px;
+  height: 36px;
+  object-fit: cover;
+  border-radius: 4px;
+  background: var(--mist);
+  display: block;
+}
+
+.history-table__bbox {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.history-table__delete {
+  padding: 6px 12px;
+  font-size: 13px;
+}
+
+.history-table--empty {
+  padding: 48px 0;
+  text-align: center;
+  color: var(--muted);
+}
+
+.history-table--empty p:first-child {
+  color: var(--ink);
+  font-weight: 500;
+  font-family: var(--font-display);
+  margin-bottom: 4px;
+}
+
+.history-table__hint {
+  font-size: 13px;
+}
