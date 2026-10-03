@@ -174,3 +174,15 @@ async def delete_observation(session: AsyncSession, observation_id: uuid.UUID) -
     await session.delete(observation)
     await session.commit()
     return True
+
+async def observation_exists(
+    session: AsyncSession,
+    image_path: str,
+) -> bool:
+    """Проверка существования записи для избежания дубликатов."""
+    stmt = select(Observation.id).where(
+        Observation.image_path == image_path
+    ).limit(1)
+
+    result = await session.execute(stmt)
+    return result.scalar_one_or_none() is not None

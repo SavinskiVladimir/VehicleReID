@@ -17,6 +17,11 @@ sqlalchemy>=2.0
 asyncpg
 pgvector
 pydantic>=2.0
+pydantic-settings>=2.0
 onnxruntime
 python-dotenv
 greenlet
+
+# Для test/test_main.py (FastAPI TestClient работает поверх httpx)
+fastapi>=0.110
+httpx
