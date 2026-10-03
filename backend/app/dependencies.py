@@ -23,6 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from .services.detector import DetectorService
 from .services.search_service import SearchService
+from .storage import FileStorage
 
 
 async def get_db_session(request: Request) -> AsyncIterator[AsyncSession]:
@@ -38,3 +39,7 @@ def get_detector_service(request: Request) -> DetectorService:
 
 def get_search_service(request: Request) -> SearchService:
     return request.app.state.search_service
+
+
+def get_file_storage(request: Request) -> FileStorage:
+    return request.app.state.file_storage

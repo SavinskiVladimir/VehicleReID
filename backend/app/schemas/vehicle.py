@@ -53,6 +53,36 @@ class BoundingBox(BaseModel):
         return (self.x1, self.y1, self.x2, self.y2)
 
 
+class DetectionResult(BaseModel):
+    """Одно обнаруженное ТС (функция 2 ТЗ) - результат POST /api/detect."""
+
+    index: int = Field(..., description="Номер детекции в ответе - используется в SearchRequest.detection_index")
+    bbox: BoundingBox
+    confidence: float = Field(..., ge=0.0, le=1.0)
+
+
+class DetectResponse(BaseModel):
+    """Ответ POST /api/detect: upload_id для последующего /api/search + список найденных ТС."""
+
+    upload_id: str = Field(..., description="Идентификатор временно сохранённого изображения")
+    detections: List[DetectionResult]
+
+
+class SearchRequest(BaseModel):
+    """Тело запроса POST /api/search - ссылается на изображение из /api/detect по upload_id."""
+
+    upload_id: str
+    detection_index: int = Field(..., description="Индекс выбранной детекции из ответа /api/detect")
+    top_k: int = Field(default=10, ge=1, le=100)
+
+
+class AddObservationRequest(BaseModel):
+    """Тело запроса POST /api/observations (функция 8 ТЗ, admin-доступ)."""
+
+    upload_id: str
+    detection_index: int
+
+
 class ObservationCreate(BaseModel):
     """
     Данные, необходимые для добавления нового наблюдения в базу
@@ -120,4 +150,3 @@ class ObservationHistoryResponse(BaseModel):
     total: int
     limit: int
     offset: int
-

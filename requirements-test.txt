@@ -25,3 +25,4 @@ greenlet
 # Для test/test_main.py (FastAPI TestClient работает поверх httpx)
 fastapi>=0.110
 httpx
+python-multipart>=0.0.9

@@ -99,7 +99,11 @@ class TestCreateApp:
 
     def test_health_route_registered(self):
         app = main_module.create_app()
-        paths = [route.path for route in app.routes]
+        # app.routes может содержать объекты без атрибута .path (например,
+        # обёртку подключённого через include_router роутера из
+        # api/routes.py) - используем getattr с дефолтом вместо
+        # прямого route.path, чтобы не упасть на таких элементах.
+        paths = [getattr(route, "path", None) for route in app.routes]
         assert "/health" in paths
 
 

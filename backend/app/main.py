@@ -25,12 +25,14 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from starlette.middleware.httpsredirect import HTTPSRedirectMiddleware
 
 from .config import get_settings
 from .services.detector import DetectorService
 from .services.image_service import ImageService
 from .services.reid_embedder import ReIDEmbedderService
 from .services.search_service import SearchService
+from .storage import FileStorage
 
 
 @asynccontextmanager
@@ -56,11 +58,19 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     )
     search_service = SearchService(image_service=image_service, embedder=embedder_service)
 
+    file_storage = FileStorage(
+        temp_dir=settings.temp_upload_dir,
+        permanent_dir=settings.permanent_storage_dir,
+        max_upload_size_bytes=settings.max_upload_size_bytes,
+        temp_ttl_seconds=settings.temp_upload_ttl_seconds,
+    )
+
     app.state.settings = settings
     app.state.engine = engine
     app.state.session_factory = session_factory
     app.state.detector_service = detector_service
     app.state.search_service = search_service
+    app.state.file_storage = file_storage
 
     yield
 
@@ -76,6 +86,16 @@ def create_app() -> FastAPI:
         lifespan=lifespan,
     )
 
+    # ВАЖНО: это НЕ terminates TLS само по себе - HTTPSRedirectMiddleware
+    # только перенаправляет http:// запросы на https://, предполагая,
+    # что реальное шифрование уже обеспечено ПЕРЕД приложением (reverse-
+    # proxy/балансировщик) либо самим uvicorn, запущенным с
+    # --ssl-keyfile/--ssl-certfile. Выключено по умолчанию
+    # (settings.enforce_https=False) - иначе локальная разработка без
+    # сертификата была бы сломана перенаправлением в никуда.
+    if settings.enforce_https:
+        app.add_middleware(HTTPSRedirectMiddleware)
+
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.cors_origins,
@@ -83,6 +103,16 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+    @app.middleware("http")
+    async def add_hsts_header(request: Request, call_next):
+        response = await call_next(request)
+        if settings.enforce_https:
+            # Strict-Transport-Security - говорит браузеру ВСЕГДА
+            # использовать HTTPS для этого origin в будущем, даже если
+            # пользователь наберёт адрес без https:// вручную.
+            response.headers["Strict-Transport-Security"] = "max-age=63072000; includeSubDomains"
+        return response
 
     @app.get("/health", tags=["service"])
     async def health_check(request: Request) -> dict:
@@ -107,11 +137,8 @@ def create_app() -> FastAPI:
             "search_service_loaded": request.app.state.search_service is not None,
         }
 
-    # Подключение API-роутов - будет добавлено вместе с api/routes.py
-    # (следующий модуль по плану ТЗ):
-    #
-    # from .api.routes import router as api_router
-    # app.include_router(api_router, prefix="/api")
+    from .api.routes import router as api_router
+    app.include_router(api_router, prefix="/api")
 
     return app
 
