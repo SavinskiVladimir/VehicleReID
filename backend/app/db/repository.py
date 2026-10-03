@@ -19,7 +19,7 @@ from __future__ import annotations
 import uuid
 from typing import List, Sequence, Tuple
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .models import Observation
@@ -64,21 +64,52 @@ async def search_similar(
     session: AsyncSession,
     query_embedding: Sequence[float],
     top_k: int = 10,
+    ef_search: int = 40,
 ) -> List[Tuple[Observation, float]]:
     """
     Поиск ближайших соседей по признаковому сходству (функция 6 ТЗ).
 
     Использует оператор косинусного расстояния pgvector (`<=>`),
     соответствующий выбранному в аналитическом разделе работы методу
-    индексации HNSW (при наличии на колонке `embedding` индекса
-    `USING hnsw (embedding vector_cosine_ops)` - см. Alembic-миграцию/
-    DDL создания индекса, применяется отдельно от ORM-модели).
+    индексации HNSW (см. db/create_indexes.py - должен быть выполнен
+    заранее, иначе pgvector просто сделает полный перебор по всем
+    строкам без ошибки, но и без выигрыша в скорости на больших
+    объёмах).
+
+    Args:
+        ef_search: размер списка кандидатов на этапе ПОИСКА (не путать
+            с ef_construction при построении индекса в
+            create_indexes.py) - управляет компромиссом между
+            точностью (recall) и скоростью конкретно этого запроса.
+            Чем больше значение, тем точнее, но медленнее поиск. 40 -
+            значение по умолчанию в самом pgvector. Параметр
+            устанавливается через SET LOCAL, то есть действует только
+            в пределах текущей транзакции/сессии и не требует
+            пересоздания индекса для подбора.
 
     Returns:
         Список (Observation, similarity), отсортированный по убыванию
         similarity. similarity = 1 - cosine_distance, то есть 1.0 -
         полностью идентичные векторы, 0.0 - ортогональные.
     """
+    # SET LOCAL hnsw.ef_search - это GUC-параметр самого расширения
+    # pgvector (регистрируется при CREATE EXTENSION vector), доступен
+    # даже если HNSW-индекс на таблице ещё не создан - в этом случае он
+    # просто ни на что не влияет (postgres делает точный перебор), без
+    # ошибки. Безопасно выполнять независимо от того, создан ли индекс.
+    #
+    # ВАЖНО: команда SET в PostgreSQL НЕ поддерживает bind-параметры
+    # ($1-стиль) для своего значения - это ограничение самого протокола
+    # PostgreSQL, а не SQLAlchemy/asyncpg (SET - команда конфигурации
+    # сессии, а не DML/SELECT). Поэтому значение подставляется в SQL
+    # напрямую, а не через параметризованный запрос, как везде в этом
+    # файле. Это безопасно ИМЕННО ЗДЕСЬ: ef_search типизирован как int
+    # на уровне сигнатуры функции, а не как произвольная строка от
+    # пользователя - int(...) ниже дополнительно гарантирует это даже
+    # при неожиданном входном значении (упадёт с ValueError, а не
+    # пропустит произвольный SQL).
+    await session.execute(text(f"SET LOCAL hnsw.ef_search = {int(ef_search)}"))
+
     # pgvector.sqlalchemy.Vector предоставляет метод cosine_distance()
     # прямо на уровне колонки ORM-модели - собственно то самое
     # "инкапсулирование деталей реализации векторного поиска" из ТЗ,
@@ -143,15 +174,3 @@ async def delete_observation(session: AsyncSession, observation_id: uuid.UUID) -
     await session.delete(observation)
     await session.commit()
     return True
-
-async def observation_exists(
-    session: AsyncSession,
-    image_path: str,
-) -> bool:
-    """Проверка существования записи для избежания дубликатов."""
-    stmt = select(Observation.id).where(
-        Observation.image_path == image_path
-    ).limit(1)
-
-    result = await session.execute(stmt)
-    return result.scalar_one_or_none() is not None
