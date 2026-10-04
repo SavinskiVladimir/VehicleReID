@@ -23,7 +23,6 @@ from typing import AsyncIterator
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from starlette.middleware.httpsredirect import HTTPSRedirectMiddleware
@@ -140,18 +139,6 @@ def create_app() -> FastAPI:
 
     from .api.routes import router as api_router
     app.include_router(api_router, prefix="/api")
-
-    # БД хранит АБСОЛЮТНЫЕ пути файловой системы (см. storage.py,
-    # Observation.image_path/crop_path) - фронтенду же нужны HTTP-ссылки.
-    # Эта отдача статики - тот мост между ними: /files/images/<uuid>.jpg
-    # и /files/crops/<uuid>.jpg отдают содержимое permanent_storage_dir/
-    # images/ и permanent_storage_dir/crops/ напрямую. Директория
-    # создаётся здесь (а не только внутри FileStorage.__init__ в
-    # lifespan), т.к. StaticFiles требует существования папки уже на
-    # момент монтирования, которое происходит раньше lifespan.
-    import os
-    os.makedirs(settings.permanent_storage_dir, exist_ok=True)
-    app.mount("/files", StaticFiles(directory=settings.permanent_storage_dir), name="files")
 
     return app
 

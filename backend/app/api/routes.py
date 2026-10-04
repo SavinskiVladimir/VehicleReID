@@ -31,8 +31,10 @@ from __future__ import annotations
 
 import logging
 import uuid
+from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
+from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..auth import require_admin
@@ -53,6 +55,25 @@ from ..storage import FileStorage, UploadNotFoundError, UploadValidationError
 
 router = APIRouter(tags=["vehicles"])
 logger = logging.getLogger(__name__)
+
+
+_SERVABLE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp"}
+
+
+def _image_file_response(path_str: str) -> FileResponse:
+    """
+    Отдаёт файл изображения по пути, сохранённому в БД. Путь берётся из
+    БД, а не от клиента, но на всякий случай отдаём ТОЛЬКО файлы с
+    расширениями изображений - чтобы запись с произвольным путём в БД
+    не превращала этот эндпоинт в чтение любых файлов сервера.
+    """
+    path = Path(path_str)
+    if path.suffix.lower() not in _SERVABLE_EXTENSIONS or not path.is_file():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Файл изображения не найден на сервере.",
+        )
+    return FileResponse(path)
 
 
 def _bbox_to_schema(bbox: tuple) -> BoundingBox:
@@ -247,3 +268,42 @@ async def delete_observation(
         )
 
     return {"deleted": True, "id": str(observation_id)}
+
+
+async def _load_observation_or_404(search_service, session, observation_id):
+    try:
+        observation = await search_service.get_observation(session, observation_id)
+    except Exception:
+        logger.exception("Ошибка при чтении наблюдения (id=%s)", observation_id)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Сервис хранения временно недоступен.",
+        )
+    if observation is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Наблюдение {observation_id} не найдено.",
+        )
+    return observation
+
+
+@router.get("/observations/{observation_id}/crop")
+async def get_observation_crop(
+    observation_id: uuid.UUID,
+    search_service: SearchService = Depends(get_search_service),
+    session: AsyncSession = Depends(get_db_session),
+) -> FileResponse:
+    """Кроп ТС наблюдения (для превью в результатах поиска и истории)."""
+    observation = await _load_observation_or_404(search_service, session, observation_id)
+    return _image_file_response(observation.crop_path)
+
+
+@router.get("/observations/{observation_id}/image")
+async def get_observation_image(
+    observation_id: uuid.UUID,
+    search_service: SearchService = Depends(get_search_service),
+    session: AsyncSession = Depends(get_db_session),
+) -> FileResponse:
+    """Исходный кадр наблюдения целиком."""
+    observation = await _load_observation_or_404(search_service, session, observation_id)
+    return _image_file_response(observation.image_path)

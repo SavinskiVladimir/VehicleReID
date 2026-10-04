@@ -1,3 +1,4 @@
+import { cropUrl } from "../utils/files";
 import "./HistoryTable.css";
 
 export default function HistoryTable({ items, onDelete, deletingId }) {
@@ -24,7 +25,7 @@ export default function HistoryTable({ items, onDelete, deletingId }) {
         {items.map((obs) => (
           <tr key={obs.id}>
             <td>
-              <img className="history-table__thumb" src={toFileUrl(obs.crop_path)} alt="" loading="lazy" />
+              <img className="history-table__thumb" src={cropUrl(obs.id)} alt="" loading="lazy" />
             </td>
             <td>
               {new Date(obs.created_at).toLocaleString("ru-RU", { dateStyle: "medium", timeStyle: "short" })}
@@ -47,9 +48,4 @@ export default function HistoryTable({ items, onDelete, deletingId }) {
       </tbody>
     </table>
   );
-}
-
-function toFileUrl(path) {
-  const filename = path.split("/").pop();
-  return `/files/crops/${filename}`;
 }

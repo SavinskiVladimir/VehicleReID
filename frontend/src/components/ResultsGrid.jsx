@@ -1,4 +1,5 @@
-import SimilarityBar from "./SimilarityBar.jsx";
+import SimilarityBar from "./SimilarityBar";
+import { cropUrl } from "../utils/files";
 import "./ResultsGrid.css";
 
 export default function ResultsGrid({ results }) {
@@ -17,7 +18,7 @@ export default function ResultsGrid({ results }) {
           <div className="result-card__rank">{i + 1}</div>
           <img
             className="result-card__image"
-            src={toFileUrl(item.observation.crop_path)}
+            src={cropUrl(item.observation.id)}
             alt={`Кандидат ${i + 1}`}
             loading="lazy"
           />
@@ -34,12 +35,4 @@ export default function ResultsGrid({ results }) {
       ))}
     </div>
   );
-}
-
-// Backend хранит абсолютные пути файловой системы (см. storage.py) -
-// предполагается, что /files/ отдаёт их статикой (см. README фронтенда
-// про настройку reverse-proxy/статики на этапе развёртывания).
-function toFileUrl(path) {
-  const filename = path.split("/").pop();
-  return `/files/crops/${filename}`;
 }

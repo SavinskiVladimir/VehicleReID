@@ -161,3 +161,33 @@ class TestDeleteObservation:
 
         result = await search_service.delete_observation(session=object(), observation_id="some-id")
         assert result is True
+
+
+class TestGetObservation:
+    @pytest.mark.asyncio
+    async def test_returns_schema_for_existing_observation(self, search_service, monkeypatch):
+        fake = _fake_observation("a.jpg")
+
+        async def fake_get_observation(session, observation_id):
+            assert observation_id == "some-id"
+            return fake
+
+        monkeypatch.setattr(
+            search_service_module.repository, "get_observation", fake_get_observation
+        )
+
+        result = await search_service.get_observation(session=object(), observation_id="some-id")
+        assert result.image_path == "a.jpg"
+        assert result.bbox.x2 == 10
+
+    @pytest.mark.asyncio
+    async def test_returns_none_when_not_found(self, search_service, monkeypatch):
+        async def fake_get_observation(session, observation_id):
+            return None
+
+        monkeypatch.setattr(
+            search_service_module.repository, "get_observation", fake_get_observation
+        )
+
+        result = await search_service.get_observation(session=object(), observation_id="missing")
+        assert result is None

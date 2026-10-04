@@ -112,6 +112,13 @@ class SearchService:
         )
         return ObservationOut.model_validate(observation)
 
+    async def get_observation(self, session: AsyncSession, observation_id) -> "ObservationOut | None":
+        """Одно наблюдение по id (None, если не найдено) - нужно для отдачи его изображений."""
+        observation = await repository.get_observation(session, observation_id)
+        if observation is None:
+            return None
+        return ObservationOut.model_validate(observation)
+
     async def get_history(
         self, session: AsyncSession, limit: int = 50, offset: int = 0
     ) -> ObservationHistoryResponse:
