@@ -15,6 +15,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import List, Tuple
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # В отличие от python-dotenv's load_dotenv() (используется, например, в
@@ -29,6 +30,10 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 # приложение запускалось одинаково вне зависимости от того, из какой
 # директории реально вызван uvicorn. config.py лежит в backend/app/ -
 # подняться на два уровня (app -> backend -> корень проекта).
+# Значение admin-токена по умолчанию - намеренно узнаваемое (см. startup_checks:
+# при его использовании при старте выдаётся предупреждение).
+DEFAULT_ADMIN_API_KEY = "change-me-in-production"
+
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 _ENV_FILE = _PROJECT_ROOT / ".env"
 
@@ -50,7 +55,6 @@ class Settings(BaseSettings):
     reid_image_width: int = 224
 
     device: str = "cpu"
-    default_top_k: int = 10
 
     cors_origins: List[str] = ["http://localhost:3000"]
 
@@ -65,7 +69,7 @@ class Settings(BaseSettings):
     # небезопасное и легко узнаваемое - чтобы при реальном
     # развёртывании сразу было заметно, если его забыли переопределить
     # через .env/переменные окружения.
-    admin_api_key: str = "change-me-in-production"
+    admin_api_key: str = DEFAULT_ADMIN_API_KEY
 
     # --- HTTPS (main.py) ---
     # По умолчанию ВЫКЛЮЧЕНО, иначе локальная разработка без TLS-
@@ -80,6 +84,27 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_file=str(_ENV_FILE), env_file_encoding="utf-8", extra="ignore"
     )
+
+    @field_validator(
+        "detector_model_path",
+        "reid_model_path",
+        "temp_upload_dir",
+        "permanent_storage_dir",
+    )
+    @classmethod
+    def _resolve_against_project_root(cls, value: str) -> str:
+        """
+        Относительные пути считаются от КОРНЯ ПРОЕКТА, а не от текущей
+        директории процесса. Иначе "ml/detection/exported/..." указывает
+        в разные места в зависимости от того, откуда запущен uvicorn
+        (из корня или из backend/) - то же семейство проблем, что уже
+        было с .env. Абсолютные пути (например, для Docker-тома)
+        остаются как есть.
+        """
+        path = Path(value)
+        if not path.is_absolute():
+            path = _PROJECT_ROOT / path
+        return str(path)
 
     @property
     def reid_image_size(self) -> Tuple[int, int]:

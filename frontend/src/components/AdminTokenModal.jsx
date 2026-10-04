@@ -4,9 +4,13 @@ import "./AdminTokenModal.css";
 export default function AdminTokenModal({ onSubmit, onCancel }) {
   const [value, setValue] = useState("");
 
+  // HTTP-заголовки передают только однобайтовые символы: токен с
+  // кириллицей браузер отправить не сможет, а сервер его не примет.
+  const isAscii = /^[\x20-\x7E]*$/.test(value);
+
   function handleSubmit(e) {
     e.preventDefault();
-    if (value.trim()) onSubmit(value.trim());
+    if (value.trim() && isAscii) onSubmit(value.trim());
   }
 
   return (
@@ -24,11 +28,16 @@ export default function AdminTokenModal({ onSubmit, onCancel }) {
           onChange={(e) => setValue(e.target.value)}
           placeholder="X-Admin-Token"
         />
+        {!isAscii && (
+          <p className="admin-modal__error">
+            Токен должен состоять из латинских букв, цифр и знаков - кириллица в заголовке не передаётся.
+          </p>
+        )}
         <div className="admin-modal__actions">
           <button type="button" className="btn btn-secondary" onClick={onCancel}>
             Отмена
           </button>
-          <button type="submit" className="btn btn-primary" disabled={!value.trim()}>
+          <button type="submit" className="btn btn-primary" disabled={!value.trim() || !isAscii}>
             Подтвердить
           </button>
         </div>

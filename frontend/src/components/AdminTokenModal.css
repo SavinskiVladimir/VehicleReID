@@ -43,6 +43,12 @@
   outline-offset: 1px;
 }
 
+.admin-modal__error {
+  margin: -8px 0 16px;
+  font-size: 13px;
+  color: var(--danger);
+}
+
 .admin-modal__actions {
   display: flex;
   justify-content: flex-end;

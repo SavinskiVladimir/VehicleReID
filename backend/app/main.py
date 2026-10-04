@@ -19,25 +19,64 @@ ONNX-моделей, многократно превышая бюджет ТЗ �
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+import logging
 from typing import AsyncIterator
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from sqlalchemy import text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from starlette.middleware.httpsredirect import HTTPSRedirectMiddleware
 
 from .config import get_settings
+from .db.models import EMBEDDING_DIM
 from .services.detector import DetectorService
 from .services.image_service import ImageService
 from .services.reid_embedder import ReIDEmbedderService
 from .services.search_service import SearchService
+from .startup_checks import (
+    admin_key_warnings,
+    check_embedding_dimension,
+    check_model_files,
+    inspect_database,
+)
 from .storage import FileStorage
+
+
+logger = logging.getLogger(__name__)
+
+
+def _configure_app_logging() -> None:
+    """
+    uvicorn настраивает только СВОИ логгеры, поэтому сообщения приложения
+    (стартовые проверки, ошибки в routes.py) без настройки выводятся
+    запасным обработчиком Python: без уровня и только от WARNING и выше -
+    "БД готова" (INFO) не видно вовсе. Подключаем обработчик в формате
+    uvicorn ("INFO:     ...") к логгеру пакета приложения.
+
+    Родительский логгер берём из __name__ ("app" при запуске из backend/,
+    "backend.app" из корня проекта) - покрывает все модули пакета. Если у
+    корневого логгера уже есть обработчики (pytest, чужая конфигурация) -
+    ничего не добавляем, чтобы не дублировать вывод.
+    """
+    package_name = __name__.rpartition(".")[0]
+    if not package_name or logging.getLogger().handlers:
+        return
+    package_logger = logging.getLogger(package_name)
+    if package_logger.handlers:
+        return
+    handler = logging.StreamHandler()
+    handler.setFormatter(logging.Formatter("%(levelname)s:     %(message)s"))
+    package_logger.addHandler(handler)
+    package_logger.setLevel(logging.INFO)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     settings = get_settings()
+
+    # Неисправимые без человека проблемы (нет файла модели) - падаем сразу
+    # с понятным сообщением, ДО создания каких-либо ресурсов.
+    check_model_files(settings)
 
     # --- Слой хранения ---
     engine = create_async_engine(settings.database_url, echo=False)
@@ -58,6 +97,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     )
     search_service = SearchService(image_service=image_service, embedder=embedder_service)
 
+    # Размерность эмбеддинга модели должна совпасть со схемой БД -
+    # иначе это вскрылось бы только на первом поиске как 503.
+    embedding_dim = check_embedding_dimension(embedder_service, image_service, EMBEDDING_DIM)
+
     file_storage = FileStorage(
         temp_dir=settings.temp_upload_dir,
         permanent_dir=settings.permanent_storage_dir,
@@ -71,6 +114,22 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.detector_service = detector_service
     app.state.search_service = search_service
     app.state.file_storage = file_storage
+    app.state.embedding_dim = embedding_dim
+
+    # Состояние БД НЕ валит приложение (ТЗ п.1.1.2.4: при недоступности
+    # хранилища - сообщить пользователю, а не прекратить работу): только
+    # лог с причиной и подсказкой. Актуальное состояние - в /health.
+    db_status = await inspect_database(engine)
+    if db_status.error:
+        logger.warning("БД недоступна при старте: %s", db_status.error)
+    for problem in db_status.problems():
+        logger.warning("Проблема с БД: %s", problem)
+    for warning in db_status.warnings():
+        logger.warning("%s", warning)
+    for warning in admin_key_warnings(settings.admin_api_key):
+        logger.warning("%s", warning)
+    if db_status.ready and not db_status.warnings():
+        logger.info("БД готова: расширение vector, таблица observations и HNSW-индекс на месте.")
 
     yield
 
@@ -78,6 +137,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 
 def create_app() -> FastAPI:
+    _configure_app_logging()
     settings = get_settings()
 
     app = FastAPI(
@@ -117,24 +177,32 @@ def create_app() -> FastAPI:
     @app.get("/health", tags=["service"])
     async def health_check(request: Request) -> dict:
         """
-        Проверка готовности сервиса: отвечает "ok" только если и БД
-        доступна, и ML-сервисы успешно загружены при старте. Не роняет
-        приложение при недоступности БД (ТЗ п.1.3.2.4: требование к
-        надёжности) - просто сообщает "degraded", чтобы вызывающая
-        сторона (мониторинг/балансировщик) могла на это отреагировать.
+        Готовность сервиса. status="ok" только если БД доступна И схема
+        готова (расширение vector + таблица observations). Отсутствие
+        HNSW-индекса не делает сервис нерабочим (поиск идёт полным
+        перебором) - оно попадает в warnings, статус остаётся "ok".
+
+        Не роняет приложение при недоступной БД (ТЗ п.1.1.2.4) - сообщает
+        "degraded". Технические детали ошибки подключения наружу не
+        отдаются (только в лог при старте): /health публичный.
+        schema.* равны null, если БД недоступна - про схему тогда
+        ничего не известно.
         """
-        database_ok = True
-        try:
-            async with request.app.state.session_factory() as session:
-                await session.execute(text("SELECT 1"))
-        except Exception:
-            database_ok = False
+        db_status = await inspect_database(request.app.state.engine)
 
         return {
-            "status": "ok" if database_ok else "degraded",
-            "database": "ok" if database_ok else "unavailable",
+            "status": "ok" if db_status.ready else "degraded",
+            "database": "ok" if db_status.reachable else "unavailable",
+            "schema": {
+                "vector_extension": db_status.vector_extension,
+                "table": db_status.table_exists,
+                "hnsw_index": db_status.hnsw_index,
+            },
+            "problems": db_status.problems(),
+            "warnings": db_status.warnings(),
             "detector_loaded": request.app.state.detector_service is not None,
             "search_service_loaded": request.app.state.search_service is not None,
+            "embedding_dim": request.app.state.embedding_dim,
         }
 
     from .api.routes import router as api_router

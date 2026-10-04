@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import UploadZone from "../components/UploadZone";
 import DetectionCanvas from "../components/DetectionCanvas";
-import DetectionList from "../components/DetectionList.jsx";
+import DetectionList from "../components/DetectionList";
 import ResultsGrid from "../components/ResultsGrid";
 import ErrorBanner from "../components/ErrorBanner";
 import AdminTokenModal from "../components/AdminTokenModal";
@@ -21,7 +21,7 @@ export default function SearchPage() {
   const [showAdminModal, setShowAdminModal] = useState(false);
   const [saveStatus, setSaveStatus] = useState("idle"); // idle | saving | saved
 
-  const { token, setToken } = useAdminToken();
+  const { token, setToken, clearToken } = useAdminToken();
   const objectUrlRef = useRef(null);
 
   useEffect(() => {
@@ -75,7 +75,16 @@ export default function SearchPage() {
       setToken(adminToken);
       setSaveStatus("saved");
     } catch (err) {
-      setError(extractErrorMessage(err));
+      if (err.response?.status === 403) {
+        // Токен не подошёл (например, ADMIN_API_KEY в .env поменяли после
+        // того, как браузер его запомнил). Забываем запомненное значение -
+        // иначе оно отправлялось бы снова и снова, а окно ввода не
+        // появлялось бы никогда.
+        clearToken();
+        setError("Неверный токен администратора. Нажмите ещё раз и введите его заново.");
+      } else {
+        setError(extractErrorMessage(err));
+      }
       setSaveStatus("idle");
     }
   }

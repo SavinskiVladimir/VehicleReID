@@ -17,7 +17,7 @@ export default function HistoryPage() {
   const [deletingId, setDeletingId] = useState(null);
   const [pendingDeleteId, setPendingDeleteId] = useState(null);
 
-  const { token, setToken } = useAdminToken();
+  const { token, setToken, clearToken } = useAdminToken();
 
   async function load() {
     setIsLoading(true);
@@ -55,7 +55,14 @@ export default function HistoryPage() {
       setItems((prev) => prev.filter((obs) => obs.id !== id));
       setTotal((prev) => prev - 1);
     } catch (err) {
-      setError(extractErrorMessage(err));
+      if (err.response?.status === 403) {
+        // См. комментарий в SearchPage.jsx: неверный токен не должен
+        // оставаться запомненным, иначе окно ввода больше не появится.
+        clearToken();
+        setError("Неверный токен администратора. Нажмите ещё раз и введите его заново.");
+      } else {
+        setError(extractErrorMessage(err));
+      }
     } finally {
       setDeletingId(null);
     }

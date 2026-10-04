@@ -21,6 +21,7 @@ pydantic-settings>=2.0
 onnxruntime
 python-dotenv
 greenlet
+onnx
 
 # Для test/test_main.py (FastAPI TestClient работает поверх httpx)
 fastapi>=0.110

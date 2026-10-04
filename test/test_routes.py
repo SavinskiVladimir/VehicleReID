@@ -58,6 +58,10 @@ class FakeReIDEmbedderService:
 def patch_ml_services_for_lifespan(monkeypatch):
     monkeypatch.setattr(main_module, "DetectorService", FakeDetectorService)
     monkeypatch.setattr(main_module, "ReIDEmbedderService", FakeReIDEmbedderService)
+    # Файлов моделей в тестах нет, заглушки не считают эмбеддинги - проверки
+    # старта отключены (они покрыты в test_startup_checks.py).
+    monkeypatch.setattr(main_module, "check_model_files", lambda settings: None)
+    monkeypatch.setattr(main_module, "check_embedding_dimension", lambda *args, **kwargs: 512)
     yield
 
 
@@ -111,6 +115,9 @@ class FakeSearchServiceRaises:
     async def delete_observation(self, *args, **kwargs):
         raise RuntimeError("database down")
 
+    async def get_observation(self, *args, **kwargs):
+        raise RuntimeError("database down")
+
 
 def _fake_observation_out(image_path="a.jpg") -> ObservationOut:
     return ObservationOut(
@@ -126,6 +133,7 @@ class FakeSearchServiceOk:
     def __init__(self):
         self.add_observation_called_with = None
         self.delete_observation_result = True
+        self.observation_to_return = None  # для эндпоинтов отдачи изображений
 
     async def search(self, session, crop, query_bbox, top_k):
         obs = _fake_observation_out()
@@ -143,6 +151,9 @@ class FakeSearchServiceOk:
 
     async def delete_observation(self, session, observation_id):
         return self.delete_observation_result
+
+    async def get_observation(self, session, observation_id):
+        return self.observation_to_return
 
 
 def _make_client(detector=None, search_service=None):
@@ -450,5 +461,107 @@ class TestDeleteObservationEndpoint:
 
         with client:
             response = client.delete("/api/observations/not-a-uuid", headers={"X-Admin-Token": ADMIN_TOKEN})
+
+        assert response.status_code == 422
+
+
+# ---------------------------------------------------------------------------
+# GET /api/observations/{id}/crop и /image
+# ---------------------------------------------------------------------------
+
+class TestObservationImageEndpoints:
+    """
+    Пути к файлам берутся ИЗ БД, а не из жёстко заданной папки: записи,
+    добавленные демо-скриптом (путь на исходный файл датасета), и
+    записи, добавленные через API (permanent-хранилище), отдаются
+    одинаково.
+    """
+
+    def _observation(self, image_path, crop_path):
+        return ObservationOut(
+            id=uuid.uuid4(), image_path=str(image_path), crop_path=str(crop_path),
+            bbox=BoundingBox(x1=0, y1=0, x2=10, y2=10), created_at=datetime.now(timezone.utc),
+        )
+
+    def _save_jpeg(self, path):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(_make_jpeg_bytes())
+        return path
+
+    def test_crop_served_from_arbitrary_path_stored_in_db(self, tmp_path):
+        # Файл лежит НЕ в permanent-хранилище, а где-то ещё (как у
+        # записей из demo_populate_db.py) - путь всё равно из БД.
+        crop = self._save_jpeg(tmp_path / "some_dataset" / "0371_c015_00065220_0.jpg")
+        search_service = FakeSearchServiceOk()
+        search_service.observation_to_return = self._observation(crop, crop)
+        client = _make_client(search_service=search_service)
+
+        with client:
+            response = client.get(f"/api/observations/{uuid.uuid4()}/crop")
+
+        assert response.status_code == 200
+        assert response.headers["content-type"] == "image/jpeg"
+        assert response.content == crop.read_bytes()
+
+    def test_full_image_endpoint(self, tmp_path):
+        image = self._save_jpeg(tmp_path / "images" / "full.jpg")
+        crop = self._save_jpeg(tmp_path / "crops" / "crop.jpg")
+        search_service = FakeSearchServiceOk()
+        search_service.observation_to_return = self._observation(image, crop)
+        client = _make_client(search_service=search_service)
+
+        with client:
+            response = client.get(f"/api/observations/{uuid.uuid4()}/image")
+
+        assert response.status_code == 200
+        assert response.content == image.read_bytes()
+
+    def test_unknown_observation_returns_404(self):
+        search_service = FakeSearchServiceOk()
+        search_service.observation_to_return = None
+        client = _make_client(search_service=search_service)
+
+        with client:
+            response = client.get(f"/api/observations/{uuid.uuid4()}/crop")
+
+        assert response.status_code == 404
+
+    def test_file_missing_on_disk_returns_404(self, tmp_path):
+        missing = tmp_path / "deleted.jpg"
+        search_service = FakeSearchServiceOk()
+        search_service.observation_to_return = self._observation(missing, missing)
+        client = _make_client(search_service=search_service)
+
+        with client:
+            response = client.get(f"/api/observations/{uuid.uuid4()}/crop")
+
+        assert response.status_code == 404
+
+    def test_non_image_extension_is_never_served(self, tmp_path):
+        secret = tmp_path / "secrets.txt"
+        secret.write_text("password=123")
+        search_service = FakeSearchServiceOk()
+        search_service.observation_to_return = self._observation(secret, secret)
+        client = _make_client(search_service=search_service)
+
+        with client:
+            response = client.get(f"/api/observations/{uuid.uuid4()}/crop")
+
+        assert response.status_code == 404
+        assert b"password" not in response.content
+
+    def test_database_unavailable_returns_503(self):
+        client = _make_client(search_service=FakeSearchServiceRaises())
+
+        with client:
+            response = client.get(f"/api/observations/{uuid.uuid4()}/crop")
+
+        assert response.status_code == 503
+
+    def test_invalid_uuid_returns_422(self):
+        client = _make_client(search_service=FakeSearchServiceOk())
+
+        with client:
+            response = client.get("/api/observations/not-a-uuid/crop")
 
         assert response.status_code == 422

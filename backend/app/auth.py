@@ -34,10 +34,16 @@ async def require_admin(request: Request, x_admin_token: str = Header(...)) -> N
     Сравнение через secrets.compare_digest - защита от timing-атак
     (обычное `==` для сравнения секретов теоретически уязвимо к
     восстановлению значения по времени сравнения строк посимвольно).
+
+    Сравниваются БАЙТЫ, а не строки: compare_digest для str с не-ASCII
+    символами бросает TypeError, и запрос с таким заголовком (например,
+    токеном кириллицей) получал бы 500 вместо 403.
     """
     settings = request.app.state.settings
 
-    if not secrets.compare_digest(x_admin_token, settings.admin_api_key):
+    provided = x_admin_token.encode("utf-8")
+    expected = settings.admin_api_key.encode("utf-8")
+    if not secrets.compare_digest(provided, expected):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Недостаточно прав для выполнения этой операции.",

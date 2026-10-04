@@ -11,9 +11,17 @@ Alembic-миграций). Читает DATABASE_URL из .env в корне п�
 
 import asyncio
 import os
+import sys
 
 from dotenv import load_dotenv
 from sqlalchemy.ext.asyncio import create_async_engine
+
+# Корень проекта - в sys.path, чтобы работал `from backend.app...`.
+# Без этого скрипт запускается только из IDE (PyCharm добавляет корень
+# проекта сам), а из обычного терминала падает с
+# "ModuleNotFoundError: No module named 'backend'" - при запуске
+# `python db/create_table.py` в sys.path попадает папка db/, не корень.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 # Ищет .env в корне проекта независимо от того, откуда запущен скрипт.
 load_dotenv()

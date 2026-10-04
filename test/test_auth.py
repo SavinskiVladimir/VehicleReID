@@ -38,3 +38,19 @@ class TestRequireAdmin:
         with pytest.raises(HTTPException) as exc_info:
             await require_admin(request, x_admin_token="")
         assert exc_info.value.status_code == 403
+
+    @pytest.mark.asyncio
+    async def test_non_ascii_token_gives_403_not_server_error(self):
+        # Раньше secrets.compare_digest(str, str) на не-ASCII символах бросал
+        # TypeError, и такой запрос получал 500 вместо 403.
+        request = _fake_request(admin_api_key="secret-123")
+        with pytest.raises(HTTPException) as exc_info:
+            await require_admin(request, x_admin_token="правильный-токен")
+        assert exc_info.value.status_code == 403
+
+    @pytest.mark.asyncio
+    async def test_non_ascii_configured_key_is_compared_correctly(self):
+        request = _fake_request(admin_api_key="ключ-админа")
+        await require_admin(request, x_admin_token="ключ-админа")  # не падает
+        with pytest.raises(HTTPException):
+            await require_admin(request, x_admin_token="другой-ключ")
