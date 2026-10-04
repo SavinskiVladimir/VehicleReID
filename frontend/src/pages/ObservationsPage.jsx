@@ -1,14 +1,14 @@
 import { useEffect, useState } from "react";
-import HistoryTable from "../components/HistoryTable";
+import ObservationsTable from "../components/ObservationsTable";
 import ErrorBanner from "../components/ErrorBanner";
 import AdminTokenModal from "../components/AdminTokenModal";
-import { getHistory, deleteObservation, extractErrorMessage } from "../api/client";
+import { getObservations, deleteObservation, extractErrorMessage } from "../api/client";
 import { useAdminToken } from "../hooks/useAdminToken";
-import "./HistoryPage.css";
+import "./ObservationsPage.css";
 
 const PAGE_SIZE = 12;
 
-export default function HistoryPage() {
+export default function ObservationsPage() {
   const [items, setItems] = useState([]);
   const [total, setTotal] = useState(0);
   const [offset, setOffset] = useState(0);
@@ -23,7 +23,7 @@ export default function HistoryPage() {
     setIsLoading(true);
     setError(null);
     try {
-      const data = await getHistory(PAGE_SIZE, offset);
+      const data = await getObservations(PAGE_SIZE, offset);
       setItems(data.items);
       setTotal(data.total);
     } catch (err) {
@@ -72,22 +72,22 @@ export default function HistoryPage() {
   const hasNext = offset + PAGE_SIZE < total;
 
   return (
-    <div className="history-page">
-      <div className="history-page__header">
-        <h2>История наблюдений</h2>
-        <p className="history-page__count">Всего записей: {total}</p>
+    <div className="observations-page">
+      <div className="observations-page__header">
+        <h2>База наблюдений</h2>
+        <p className="observations-page__count">Записей в базе: {total}</p>
       </div>
 
       <ErrorBanner message={error} onDismiss={() => setError(null)} />
 
       {isLoading ? (
-        <p className="history-page__loading">Загрузка...</p>
+        <p className="observations-page__loading">Загрузка...</p>
       ) : (
         <>
-          <HistoryTable items={items} onDelete={requestDelete} deletingId={deletingId} />
+          <ObservationsTable items={items} onDelete={requestDelete} deletingId={deletingId} />
 
           {total > PAGE_SIZE && (
-            <div className="history-page__pager">
+            <div className="observations-page__pager">
               <button
                 type="button"
                 className="btn btn-secondary"
@@ -96,7 +96,7 @@ export default function HistoryPage() {
               >
                 Назад
               </button>
-              <span className="num history-page__pager-label">
+              <span className="num observations-page__pager-label">
                 {offset + 1}–{Math.min(offset + PAGE_SIZE, total)} из {total}
               </span>
               <button

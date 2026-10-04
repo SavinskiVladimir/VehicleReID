@@ -26,7 +26,14 @@ export default function Header({ page, onNavigate }) {
           className={page === "history" ? "is-active" : ""}
           onClick={() => onNavigate("history")}
         >
-          История
+          История поиска
+        </button>
+        <button
+          type="button"
+          className={page === "observations" ? "is-active" : ""}
+          onClick={() => onNavigate("observations")}
+        >
+          База наблюдений
         </button>
       </nav>
     </header>

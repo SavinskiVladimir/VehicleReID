@@ -32,20 +32,28 @@ from __future__ import annotations
 import logging
 import uuid
 from pathlib import Path
+from typing import Optional
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
 from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..auth import require_admin
-from ..dependencies import get_db_session, get_detector_service, get_file_storage, get_search_service
+from ..dependencies import (
+    get_app_settings,
+    get_db_session,
+    get_detector_service,
+    get_file_storage,
+    get_search_service,
+)
 from ..schemas.vehicle import (
     AddObservationRequest,
     BoundingBox,
     DetectionResult,
     DetectResponse,
-    ObservationHistoryResponse,
+    ObservationListResponse,
     ObservationOut,
+    SearchHistoryResponse,
     SearchRequest,
     SearchResponse,
 )
@@ -139,15 +147,60 @@ async def detect_vehicles(
     )
 
 
+async def _record_search_best_effort(
+    search_service, storage, session, settings, crop, bbox, embedding, top_k, response
+):
+    """
+    Записывает выполненный поиск в журнал. ЖУРНАЛ ВТОРИЧЕН: пользователь уже
+    получил результат поиска, и сбой записи в журнал (нет таблицы, БД
+    моргнула, нет места на диске) не должен превращать удачный поиск в ошибку.
+    Сбой логируется, клиент получает ответ без query_id.
+
+    Returns:
+        id записи журнала либо None, если записать не удалось.
+    """
+    saved_path = None
+    try:
+        _, saved_path = storage.save_permanent(crop, subdir="queries")
+        item = await search_service.record_search(
+            session, saved_path, bbox, embedding, top_k, response
+        )
+    except Exception:
+        logger.exception("Не удалось записать поиск в журнал (сам поиск при этом выполнен)")
+        if saved_path:
+            storage.delete_permanent(saved_path)  # не оставлять файл без записи
+        try:
+            await session.rollback()
+        except Exception:
+            pass
+        return None
+
+    # Ограничение размера журнала. Сбой здесь не отменяет уже сделанную запись.
+    try:
+        for old_path in await search_service.prune_search_history(
+            session, settings.search_history_max_items
+        ):
+            storage.delete_permanent(old_path)
+    except Exception:
+        logger.exception("Не удалось обрезать журнал поиска до лимита")
+
+    return item.id
+
+
 @router.post("/search", response_model=SearchResponse)
 async def search_vehicle(
     body: SearchRequest,
     detector: DetectorService = Depends(get_detector_service),
     search_service: SearchService = Depends(get_search_service),
     storage: FileStorage = Depends(get_file_storage),
+    settings=Depends(get_app_settings),
     session: AsyncSession = Depends(get_db_session),
 ) -> SearchResponse:
-    """Функции 3-7 ТЗ: кроп выбранного ТС -> эмбеддинг -> поиск -> ответ."""
+    """
+    Функции 3-7 ТЗ: кроп выбранного ТС -> эмбеддинг -> поиск -> ответ. Выполненный
+    поиск записывается в журнал (функция 9) - автоматически и без влияния на
+    сам результат.
+    """
     try:
         image = storage.load_temp(body.upload_id)
     except UploadNotFoundError as e:
@@ -157,8 +210,9 @@ async def search_vehicle(
     crop = detector.crop_with_padding(image, chosen.bbox)
 
     try:
-        response = await search_service.search(
-            session, crop=crop, query_bbox=chosen.bbox, top_k=body.top_k
+        embedding = search_service.compute_embedding(crop)
+        response = await search_service.search_by_embedding(
+            session, embedding, chosen.bbox, body.top_k
         )
     except HTTPException:
         raise
@@ -172,7 +226,11 @@ async def search_vehicle(
             detail="Сервис поиска временно недоступен. Попробуйте позже.",
         )
 
-    return response
+    query_id = await _record_search_best_effort(
+        search_service, storage, session, settings, crop,
+        chosen.bbox, embedding, body.top_k, response,
+    )
+    return response.model_copy(update={"query_id": query_id})
 
 
 @router.post(
@@ -223,21 +281,21 @@ async def add_observation(
     return result
 
 
-@router.get("/observations", response_model=ObservationHistoryResponse)
-async def get_observation_history(
+@router.get("/observations", response_model=ObservationListResponse)
+async def list_observations(
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
     search_service: SearchService = Depends(get_search_service),
     session: AsyncSession = Depends(get_db_session),
-) -> ObservationHistoryResponse:
-    """Функция 9 ТЗ: история ранее загруженных наблюдений, с пагинацией."""
+) -> ObservationListResponse:
+    """Список записей БАЗЫ НАБЛЮДЕНИЙ (то, в чём ищем) с пагинацией. Журнал поиска - /search-history."""
     try:
-        return await search_service.get_history(session, limit=limit, offset=offset)
+        return await search_service.list_observations(session, limit=limit, offset=offset)
     except Exception:
-        logger.exception("Ошибка при получении истории наблюдений")
+        logger.exception("Ошибка при получении списка наблюдений")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="История наблюдений временно недоступна.",
+            detail="База наблюдений временно недоступна.",
         )
 
 
@@ -293,7 +351,7 @@ async def get_observation_crop(
     search_service: SearchService = Depends(get_search_service),
     session: AsyncSession = Depends(get_db_session),
 ) -> FileResponse:
-    """Кроп ТС наблюдения (для превью в результатах поиска и истории)."""
+    """Кроп ТС наблюдения (для превью в результатах поиска и в списке базы)."""
     observation = await _load_observation_or_404(search_service, session, observation_id)
     return _image_file_response(observation.crop_path)
 
@@ -307,3 +365,125 @@ async def get_observation_image(
     """Исходный кадр наблюдения целиком."""
     observation = await _load_observation_or_404(search_service, session, observation_id)
     return _image_file_response(observation.image_path)
+
+
+# ---------------------------------------------------------------------------
+# Журнал поиска (функция 9 ТЗ) - ОТДЕЛЬНО от базы наблюдений (/observations)
+# ---------------------------------------------------------------------------
+
+@router.get("/search-history", response_model=SearchHistoryResponse)
+async def list_search_history(
+    limit: int = Query(default=20, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+    search_service: SearchService = Depends(get_search_service),
+    session: AsyncSession = Depends(get_db_session),
+) -> SearchHistoryResponse:
+    """Журнал выполненных поисков, сначала новые, с пагинацией."""
+    try:
+        return await search_service.list_search_history(session, limit=limit, offset=offset)
+    except Exception:
+        logger.exception("Ошибка при получении журнала поиска")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="История поиска временно недоступна.",
+        )
+
+
+@router.get("/search-history/{query_id}/crop")
+async def get_search_query_crop(
+    query_id: uuid.UUID,
+    search_service: SearchService = Depends(get_search_service),
+    session: AsyncSession = Depends(get_db_session),
+) -> FileResponse:
+    """Кроп, по которому выполнялся поиск (превью записи журнала)."""
+    try:
+        crop_path = await search_service.get_search_crop_path(session, query_id)
+    except Exception:
+        logger.exception("Ошибка при чтении записи журнала (id=%s)", query_id)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="История поиска временно недоступна.",
+        )
+    if crop_path is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Запись журнала {query_id} не найдена.",
+        )
+    return _image_file_response(crop_path)
+
+
+@router.post("/search-history/{query_id}/search", response_model=SearchResponse)
+async def rerun_search(
+    query_id: uuid.UUID,
+    top_k: Optional[int] = Query(default=None, ge=1, le=100),
+    search_service: SearchService = Depends(get_search_service),
+    session: AsyncSession = Depends(get_db_session),
+) -> SearchResponse:
+    """
+    Повторный поиск из журнала (функция 9 ТЗ): по сохранённому вектору, с ТЕКУЩИМ
+    содержимым базы наблюдений. Исходное изображение и модели не нужны. В журнал
+    повтор не записывается. top_k по умолчанию - как в исходном поиске.
+    """
+    try:
+        response = await search_service.rerun_search(session, query_id, top_k=top_k)
+    except Exception:
+        logger.exception("Ошибка при повторном поиске (id=%s)", query_id)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Сервис поиска временно недоступен. Попробуйте позже.",
+        )
+    if response is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Запись журнала {query_id} не найдена.",
+        )
+    return response
+
+
+@router.delete("/search-history/{query_id}", dependencies=[Depends(require_admin)])
+async def delete_search_query(
+    query_id: uuid.UUID,
+    search_service: SearchService = Depends(get_search_service),
+    storage: FileStorage = Depends(get_file_storage),
+    session: AsyncSession = Depends(get_db_session),
+) -> dict:
+    """Удаление одной записи журнала (вместе с файлом кропа). Только администратор."""
+    try:
+        crop_path = await search_service.delete_search_query(session, query_id)
+    except Exception:
+        logger.exception("Ошибка при удалении записи журнала (id=%s)", query_id)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Сервис хранения временно недоступен.",
+        )
+    if crop_path is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Запись журнала {query_id} не найдена.",
+        )
+    storage.delete_permanent(crop_path)
+    return {"deleted": True, "id": str(query_id)}
+
+
+@router.delete("/search-history", dependencies=[Depends(require_admin)])
+async def clear_search_history(
+    search_service: SearchService = Depends(get_search_service),
+    storage: FileStorage = Depends(get_file_storage),
+    session: AsyncSession = Depends(get_db_session),
+) -> dict:
+    """
+    Полная очистка журнала поиска. Только администратор: у системы нет
+    учётных записей пользователей, журнал общий - очищать чужие запросы
+    любому посетителю нельзя.
+    """
+    try:
+        crop_paths = await search_service.clear_search_history(session)
+    except Exception:
+        logger.exception("Ошибка при очистке журнала поиска")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Сервис хранения временно недоступен.",
+        )
+    for path in crop_paths:
+        storage.delete_permanent(path)
+    return {"deleted": len(crop_paths)}

@@ -96,3 +96,12 @@ class TestIsolationFromDeveloperDotenv:
     def test_explicit_environment_variables_still_work(self, monkeypatch):
         monkeypatch.setenv("ADMIN_API_KEY", "задан-тестом")
         assert Settings().admin_api_key == "задан-тестом"
+
+
+class TestSearchHistoryLimit:
+    def test_default(self):
+        assert _settings().search_history_max_items == 500
+
+    def test_override_from_environment(self, monkeypatch):
+        monkeypatch.setenv("SEARCH_HISTORY_MAX_ITEMS", "50")
+        assert _settings().search_history_max_items == 50

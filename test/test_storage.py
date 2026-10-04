@@ -148,3 +148,38 @@ class TestPermanentStorage:
         assert "images" in image_path
         assert "crops" in crop_path
         assert image_path != crop_path
+
+
+class TestDeletePermanent:
+    def test_deletes_file_inside_storage(self, storage):
+        _, path = storage.save_permanent(Image.new("RGB", (10, 10)), subdir="queries")
+        assert storage.delete_permanent(path) is True
+        from pathlib import Path
+        assert not Path(path).exists()
+
+    def test_missing_file_returns_false(self, storage, tmp_path):
+        assert storage.delete_permanent(str(tmp_path / "permanent" / "queries" / "nope.jpg")) is False
+
+    def test_file_outside_storage_is_never_deleted(self, storage, tmp_path):
+        # Путь приходит из БД: запись, указывающая на файл исходного датасета
+        # (как у наблюдений из demo_populate_db.py), не должна удалять его.
+        foreign = tmp_path / "dataset" / "image.jpg"
+        foreign.parent.mkdir()
+        foreign.write_bytes(b"data")
+
+        assert storage.delete_permanent(str(foreign)) is False
+        assert foreign.exists()
+
+    def test_path_traversal_out_of_storage_is_rejected(self, storage, tmp_path):
+        foreign = tmp_path / "secret.jpg"
+        foreign.write_bytes(b"data")
+        sneaky = str(tmp_path / "permanent" / "queries" / ".." / ".." / "secret.jpg")
+
+        assert storage.delete_permanent(sneaky) is False
+        assert foreign.exists()
+
+    def test_directory_is_not_deleted(self, storage, tmp_path):
+        directory = tmp_path / "permanent" / "queries"
+        directory.mkdir(parents=True, exist_ok=True)
+        assert storage.delete_permanent(str(directory)) is False
+        assert directory.exists()

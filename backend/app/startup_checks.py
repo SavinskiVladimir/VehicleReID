@@ -135,6 +135,7 @@ class DatabaseStatus:
     vector_extension: Optional[bool] = None
     table_exists: Optional[bool] = None
     hnsw_index: Optional[bool] = None
+    history_table: Optional[bool] = None  # таблица журнала поиска search_queries
     error: Optional[str] = field(default=None, repr=False)  # только для лога, наружу не отдаётся
 
     @property
@@ -157,12 +158,18 @@ class DatabaseStatus:
         return result
 
     def warnings(self) -> List[str]:
-        """Не блокирует работу, но влияет на скорость."""
+        """Не блокирует работу поиска, но что-то работает хуже или не работает."""
+        result = []
         if self.ready and not self.hnsw_index:
-            return ["Нет HNSW-индекса на observations.embedding: поиск работает полным перебором "
-                    "и не уложится в требование ТЗ (30 мс на 100 000 записей). "
-                    "Выполните python db/create_indexes.py"]
-        return []
+            result.append("Нет HNSW-индекса на observations.embedding: поиск работает полным перебором "
+                          "и не уложится в требование ТЗ (30 мс на 100 000 записей). "
+                          "Выполните python db/create_indexes.py")
+        # is False, а не "not": None означает "неизвестно" (БД недоступна), это не отсутствие.
+        if self.ready and self.history_table is False:
+            result.append("Нет таблицы журнала поиска search_queries: поиск работает, но история "
+                          "поиска не сохраняется. Выполните python db/create_table.py "
+                          "(существующие данные не затрагиваются)")
+        return result
 
 
 async def inspect_database(engine: AsyncEngine, timeout_seconds: float = 5.0) -> DatabaseStatus:
@@ -182,6 +189,9 @@ async def inspect_database(engine: AsyncEngine, timeout_seconds: float = 5.0) ->
             table = (await conn.execute(
                 text("SELECT to_regclass('public.observations') IS NOT NULL")
             )).scalar()
+            history = (await conn.execute(
+                text("SELECT to_regclass('public.search_queries') IS NOT NULL")
+            )).scalar()
             hnsw = (await conn.execute(
                 text("SELECT EXISTS (SELECT 1 FROM pg_indexes "
                      "WHERE tablename = 'observations' AND indexdef ILIKE '%USING hnsw%')")
@@ -191,6 +201,7 @@ async def inspect_database(engine: AsyncEngine, timeout_seconds: float = 5.0) ->
                 vector_extension=bool(extension),
                 table_exists=bool(table),
                 hnsw_index=bool(hnsw),
+                history_table=bool(history),
             )
 
     try:

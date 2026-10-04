@@ -202,3 +202,157 @@ class TestDeleteObservation:
 
         results = await repository.search_similar(session, _make_embedding(0), top_k=10)
         assert results == []
+
+
+# ---------------------------------------------------------------------------
+# Журнал поиска (search_queries) - отдельно от базы наблюдений
+# ---------------------------------------------------------------------------
+
+async def _add_query(session, name="q", dim_index=0, top_k=10, result_count=3, top_similarity=0.9):
+    return await repository.add_search_query(
+        session, crop_path=f"/store/queries/{name}.jpg", bbox=(1, 2, 30, 40),
+        embedding=_make_embedding(dim_index), top_k=top_k,
+        result_count=result_count, top_similarity=top_similarity,
+    )
+
+
+class TestSearchQueriesBasics:
+    @pytest.mark.asyncio
+    async def test_add_and_get_roundtrip(self, session):
+        added = await _add_query(session, "a", top_similarity=0.77, result_count=4, top_k=15)
+        fetched = await repository.get_search_query(session, added.id)
+
+        assert fetched is not None
+        assert fetched.crop_path == "/store/queries/a.jpg"
+        assert fetched.bbox == {"x1": 1, "y1": 2, "x2": 30, "y2": 40}
+        assert fetched.top_k == 15 and fetched.result_count == 4
+        assert fetched.top_similarity == pytest.approx(0.77)
+        assert fetched.created_at is not None
+
+    @pytest.mark.asyncio
+    async def test_top_similarity_may_be_null_when_nothing_found(self, session):
+        added = await _add_query(session, "empty", result_count=0, top_similarity=None)
+        assert (await repository.get_search_query(session, added.id)).top_similarity is None
+
+    @pytest.mark.asyncio
+    async def test_get_unknown_returns_none(self, session):
+        assert await repository.get_search_query(session, uuid.uuid4()) is None
+
+    @pytest.mark.asyncio
+    async def test_journal_and_observation_base_are_independent(self, session):
+        await repository.add_observation(session, "a.jpg", "a_c.jpg", (0, 0, 10, 10), _make_embedding(0))
+        await _add_query(session, "q1")
+        await _add_query(session, "q2")
+
+        _, observations_total = await repository.list_observations(session)
+        _, queries_total = await repository.list_search_queries(session)
+        assert observations_total == 1 and queries_total == 2
+
+        # поиск по базе наблюдений не видит записей журнала
+        results = await repository.search_similar(session, _make_embedding(0), top_k=10)
+        assert [o.image_path for o, _ in results] == ["a.jpg"]
+
+
+class TestSearchQueriesListing:
+    @pytest.mark.asyncio
+    async def test_newest_first_with_pagination(self, session):
+        ids = [(await _add_query(session, f"q{i}")).id for i in range(5)]
+
+        page1, total = await repository.list_search_queries(session, limit=2, offset=0)
+        page2, _ = await repository.list_search_queries(session, limit=2, offset=2)
+
+        assert total == 5
+        assert [q.id for q in page1] == [ids[4], ids[3]]  # самые новые - первыми
+        assert [q.id for q in page2] == [ids[2], ids[1]]
+
+    @pytest.mark.asyncio
+    async def test_empty_journal(self, session):
+        items, total = await repository.list_search_queries(session)
+        assert items == [] and total == 0
+
+
+class TestRerunFromStoredVector:
+    @pytest.mark.asyncio
+    async def test_vector_read_back_from_db_works_as_search_query(self, session):
+        # Основа повторного поиска: вектор, ПРОЧИТАННЫЙ из БД (не исходный
+        # Python-список), должен корректно использоваться как запрос.
+        await repository.add_observation(session, "near.jpg", "n.jpg", (0, 0, 1, 1), _make_embedding(0))
+        await repository.add_observation(session, "far.jpg", "f.jpg", (0, 0, 1, 1), _make_embedding(7))
+        stored = await _add_query(session, "q", dim_index=0)
+
+        fetched = await repository.get_search_query(session, stored.id)
+        results = await repository.search_similar(session, fetched.embedding, top_k=5)
+
+        assert results[0][0].image_path == "near.jpg"
+        assert results[0][1] == pytest.approx(1.0, abs=1e-4)
+
+    @pytest.mark.asyncio
+    async def test_rerun_sees_current_database_not_a_snapshot(self, session):
+        stored = await _add_query(session, "q", dim_index=3)
+        before = await repository.search_similar(
+            session, (await repository.get_search_query(session, stored.id)).embedding, top_k=5
+        )
+        assert before == []
+
+        await repository.add_observation(session, "new.jpg", "n.jpg", (0, 0, 1, 1), _make_embedding(3))
+        after = await repository.search_similar(
+            session, (await repository.get_search_query(session, stored.id)).embedding, top_k=5
+        )
+        assert [o.image_path for o, _ in after] == ["new.jpg"]
+
+
+class TestSearchQueriesDeletion:
+    @pytest.mark.asyncio
+    async def test_delete_returns_crop_path_and_removes_record(self, session):
+        added = await _add_query(session, "gone")
+        path = await repository.delete_search_query(session, added.id)
+
+        assert path == "/store/queries/gone.jpg"
+        assert await repository.get_search_query(session, added.id) is None
+
+    @pytest.mark.asyncio
+    async def test_delete_unknown_returns_none(self, session):
+        assert await repository.delete_search_query(session, uuid.uuid4()) is None
+
+    @pytest.mark.asyncio
+    async def test_delete_does_not_touch_observation_base(self, session):
+        await repository.add_observation(session, "a.jpg", "a_c.jpg", (0, 0, 10, 10), _make_embedding(0))
+        added = await _add_query(session, "q")
+        await repository.delete_search_query(session, added.id)
+
+        _, observations_total = await repository.list_observations(session)
+        assert observations_total == 1
+
+    @pytest.mark.asyncio
+    async def test_clear_returns_all_paths_and_empties_journal_only(self, session):
+        await repository.add_observation(session, "a.jpg", "a_c.jpg", (0, 0, 10, 10), _make_embedding(0))
+        await _add_query(session, "x")
+        await _add_query(session, "y")
+
+        paths = await repository.clear_search_queries(session)
+
+        assert sorted(paths) == ["/store/queries/x.jpg", "/store/queries/y.jpg"]
+        _, queries_total = await repository.list_search_queries(session)
+        _, observations_total = await repository.list_observations(session)
+        assert queries_total == 0 and observations_total == 1  # база наблюдений цела
+
+
+class TestPruneSearchQueries:
+    @pytest.mark.asyncio
+    async def test_keeps_newest_and_returns_paths_of_deleted(self, session):
+        for i in range(6):
+            await _add_query(session, f"q{i}")
+
+        deleted_paths = await repository.prune_search_queries(session, keep=4)
+
+        assert sorted(deleted_paths) == ["/store/queries/q0.jpg", "/store/queries/q1.jpg"]
+        remaining, total = await repository.list_search_queries(session, limit=10)
+        assert total == 4
+        assert [q.crop_path for q in remaining] == [f"/store/queries/q{i}.jpg" for i in (5, 4, 3, 2)]
+
+    @pytest.mark.asyncio
+    async def test_nothing_deleted_when_within_limit(self, session):
+        await _add_query(session, "only")
+        assert await repository.prune_search_queries(session, keep=500) == []
+        _, total = await repository.list_search_queries(session)
+        assert total == 1

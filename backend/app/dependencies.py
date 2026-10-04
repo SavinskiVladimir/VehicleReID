@@ -43,3 +43,7 @@ def get_search_service(request: Request) -> SearchService:
 
 def get_file_storage(request: Request) -> FileStorage:
     return request.app.state.file_storage
+
+
+def get_app_settings(request: Request):
+    return request.app.state.settings

@@ -149,7 +149,9 @@ class TestHealthCheck:
         assert data["search_service_loaded"] is True
         assert data["embedding_dim"] == 512
         # Про схему при недоступной БД ничего не известно: null, а не false.
-        assert data["schema"] == {"vector_extension": None, "table": None, "hnsw_index": None}
+        assert data["schema"] == {
+            "vector_extension": None, "table": None, "hnsw_index": None, "search_history_table": None,
+        }
         assert any("недоступна" in problem for problem in data["problems"])
         # Технические детали подключения (хост/порт/пароль) наружу не отдаются.
         assert "59999" not in response.text and "fake" not in response.text
@@ -260,7 +262,9 @@ class TestHealthCheckWithRealDatabase:
 
         assert data["status"] == "ok"
         assert data["database"] == "ok"
-        assert data["schema"] == {"vector_extension": True, "table": True, "hnsw_index": True}
+        assert data["schema"] == {
+            "vector_extension": True, "table": True, "hnsw_index": True, "search_history_table": True,
+        }
         assert data["problems"] == []
         assert data["warnings"] == []
 

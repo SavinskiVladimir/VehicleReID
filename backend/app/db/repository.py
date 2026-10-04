@@ -19,10 +19,10 @@ from __future__ import annotations
 import uuid
 from typing import List, Sequence, Tuple
 
-from sqlalchemy import func, select, text
+from sqlalchemy import delete, func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from .models import Observation
+from .models import Observation, SearchQuery
 
 
 async def add_observation(
@@ -175,14 +175,91 @@ async def delete_observation(session: AsyncSession, observation_id: uuid.UUID) -
     await session.commit()
     return True
 
-async def observation_exists(
-    session: AsyncSession,
-    image_path: str,
-) -> bool:
-    """Проверка существования записи для избежания дубликатов."""
-    stmt = select(Observation.id).where(
-        Observation.image_path == image_path
-    ).limit(1)
 
-    result = await session.execute(stmt)
-    return result.scalar_one_or_none() is not None
+# ---------------------------------------------------------------------------
+# Журнал поиска (таблица search_queries) - ОТДЕЛЬНО от базы наблюдений.
+# ---------------------------------------------------------------------------
+
+async def add_search_query(
+    session: AsyncSession,
+    crop_path: str,
+    bbox: Tuple[int, int, int, int],
+    embedding: Sequence[float],
+    top_k: int,
+    result_count: int,
+    top_similarity: float | None,
+) -> SearchQuery:
+    """Записывает выполненный поиск в журнал."""
+    x1, y1, x2, y2 = bbox
+    query = SearchQuery(
+        crop_path=crop_path,
+        bbox_x1=x1, bbox_y1=y1, bbox_x2=x2, bbox_y2=y2,
+        embedding=list(embedding),
+        top_k=top_k,
+        result_count=result_count,
+        top_similarity=top_similarity,
+    )
+    session.add(query)
+    await session.commit()
+    await session.refresh(query)
+    return query
+
+
+async def list_search_queries(
+    session: AsyncSession, limit: int = 20, offset: int = 0
+) -> Tuple[List[SearchQuery], int]:
+    """Журнал поиска, сначала новые. Возвращает (страница, всего записей)."""
+    total = (await session.execute(select(func.count()).select_from(SearchQuery))).scalar_one()
+    stmt = (
+        select(SearchQuery)
+        .order_by(SearchQuery.created_at.desc())
+        .limit(limit)
+        .offset(offset)
+    )
+    return list((await session.execute(stmt)).scalars().all()), total
+
+
+async def get_search_query(session: AsyncSession, query_id: uuid.UUID) -> SearchQuery | None:
+    return await session.get(SearchQuery, query_id)
+
+
+async def delete_search_query(session: AsyncSession, query_id: uuid.UUID) -> str | None:
+    """
+    Удаляет запись журнала. Возвращает путь к её кропу (чтобы вызывающий код
+    удалил и файл с диска) либо None, если записи с таким id нет.
+    """
+    query = await session.get(SearchQuery, query_id)
+    if query is None:
+        return None
+    crop_path = query.crop_path
+    await session.delete(query)
+    await session.commit()
+    return crop_path
+
+
+async def clear_search_queries(session: AsyncSession) -> List[str]:
+    """Полностью очищает журнал. Возвращает пути удалённых кропов."""
+    crop_paths = list((await session.execute(select(SearchQuery.crop_path))).scalars().all())
+    await session.execute(delete(SearchQuery))
+    await session.commit()
+    return crop_paths
+
+
+async def prune_search_queries(session: AsyncSession, keep: int) -> List[str]:
+    """
+    Оставляет в журнале только `keep` самых новых записей, остальные удаляет.
+    Возвращает пути кропов удалённых записей (файлы удаляет вызывающий код).
+    Без ограничения журнал рос бы бесконечно: он пишется автоматически при
+    каждом поиске, в отличие от базы наблюдений.
+    """
+    stmt = (
+        select(SearchQuery.id, SearchQuery.crop_path)
+        .order_by(SearchQuery.created_at.desc())
+        .offset(keep)
+    )
+    rows = (await session.execute(stmt)).all()
+    if not rows:
+        return []
+    await session.execute(delete(SearchQuery).where(SearchQuery.id.in_([r[0] for r in rows])))
+    await session.commit()
+    return [r[1] for r in rows]

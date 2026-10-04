@@ -214,6 +214,20 @@ class TestDatabaseStatus:
         # Нет таблицы - говорить про индекс бессмысленно.
         assert DatabaseStatus(True, True, False, False).warnings() == []
 
+    def test_missing_history_table_is_warning_search_still_works(self):
+        # Существующая БД, созданная до появления журнала поиска: поиск
+        # работает (ready), но историю писать некуда - предупреждение, не ошибка.
+        status = DatabaseStatus(True, True, True, True, history_table=False)
+        assert status.ready is True
+        assert status.problems() == []
+        warnings = status.warnings()
+        assert len(warnings) == 1
+        assert "search_queries" in warnings[0] and "create_table" in warnings[0]
+
+    def test_unknown_history_table_gives_no_warning(self):
+        # None = "неизвестно" (например, БД недоступна) - это не "таблицы нет".
+        assert DatabaseStatus(True, True, True, True, history_table=None).warnings() == []
+
     def test_clean_state_has_no_problems_or_warnings(self):
         status = DatabaseStatus(True, True, True, True)
         assert status.problems() == [] and status.warnings() == []
@@ -265,8 +279,21 @@ class TestInspectDatabaseReal:
         status = await inspect_database(engine)
 
         assert status.reachable and status.vector_extension
-        assert status.table_exists and status.hnsw_index
+        assert status.table_exists and status.hnsw_index and status.history_table
         assert status.ready and status.problems() == [] and status.warnings() == []
+
+    @pytest.mark.asyncio
+    async def test_old_database_without_journal_table(self, engine):
+        # Сценарий реального пользователя: БД создана старыми скриптами, таблицы
+        # журнала поиска в ней нет.
+        await self._reset(engine, table=True, index=True)
+        async with engine.begin() as conn:
+            await conn.execute(text("DROP TABLE search_queries"))
+        status = await inspect_database(engine)
+
+        assert status.ready is True          # поиск по базе работает
+        assert status.history_table is False
+        assert any("search_queries" in w for w in status.warnings())
 
     @pytest.mark.asyncio
     async def test_table_without_index(self, engine):

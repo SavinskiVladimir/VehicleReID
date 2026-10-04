@@ -1,9 +1,9 @@
-.history-table {
+.observations-table {
   width: 100%;
   border-collapse: collapse;
 }
 
-.history-table thead th {
+.observations-table thead th {
   text-align: left;
   font-size: 12px;
   font-weight: 500;
@@ -12,14 +12,14 @@
   border-bottom: 1px solid var(--line);
 }
 
-.history-table tbody td {
+.observations-table tbody td {
   padding: 10px 12px;
   border-bottom: 1px solid var(--line);
   font-size: 14px;
   vertical-align: middle;
 }
 
-.history-table__thumb {
+.observations-table__thumb {
   width: 48px;
   height: 36px;
   object-fit: cover;
@@ -28,29 +28,29 @@
   display: block;
 }
 
-.history-table__bbox {
+.observations-table__bbox {
   color: var(--muted);
   font-size: 13px;
 }
 
-.history-table__delete {
+.observations-table__delete {
   padding: 6px 12px;
   font-size: 13px;
 }
 
-.history-table--empty {
+.observations-table--empty {
   padding: 48px 0;
   text-align: center;
   color: var(--muted);
 }
 
-.history-table--empty p:first-child {
+.observations-table--empty p:first-child {
   color: var(--ink);
   font-weight: 500;
   font-family: var(--font-display);
   margin-bottom: 4px;
 }
 
-.history-table__hint {
+.observations-table__hint {
   font-size: 13px;
 }

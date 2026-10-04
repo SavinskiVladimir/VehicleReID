@@ -179,8 +179,9 @@ def create_app() -> FastAPI:
         """
         Готовность сервиса. status="ok" только если БД доступна И схема
         готова (расширение vector + таблица observations). Отсутствие
-        HNSW-индекса не делает сервис нерабочим (поиск идёт полным
-        перебором) - оно попадает в warnings, статус остаётся "ok".
+        HNSW-индекса или таблицы журнала поиска не делает сервис нерабочим
+        (поиск идёт полным перебором / без записи истории) - это попадает в
+        warnings, статус остаётся "ok".
 
         Не роняет приложение при недоступной БД (ТЗ п.1.1.2.4) - сообщает
         "degraded". Технические детали ошибки подключения наружу не
@@ -197,6 +198,7 @@ def create_app() -> FastAPI:
                 "vector_extension": db_status.vector_extension,
                 "table": db_status.table_exists,
                 "hnsw_index": db_status.hnsw_index,
+                "search_history_table": db_status.history_table,
             },
             "problems": db_status.problems(),
             "warnings": db_status.warnings(),

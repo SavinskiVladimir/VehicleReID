@@ -17,9 +17,10 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime, timezone
+from typing import Optional
 
 from pgvector.sqlalchemy import Vector
-from sqlalchemy import DateTime, Integer, String
+from sqlalchemy import DateTime, Float, Integer, String
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -55,7 +56,7 @@ class Observation(Base):
     # файлов (локальная ФС / S3-совместимое хранилище) вынесено за
     # пределы этой модели - здесь фиксируется только путь.
     image_path: Mapped[str] = mapped_column(String, nullable=False)
-    crop_path: Mapped[str] = mapped_column(String, nullable=False, unique=True, index=True)
+    crop_path: Mapped[str] = mapped_column(String, nullable=False)
 
     # Координаты ограничивающего прямоугольника на ИСХОДНОМ изображении
     # (не на кропе) - чтобы можно было восстановить, откуда именно
@@ -84,3 +85,59 @@ class Observation(Base):
 
     def __repr__(self) -> str:
         return f"<Observation id={self.id} created_at={self.created_at}>"
+
+
+class SearchQuery(Base):
+    """
+    Один выполненный поиск - запись ЖУРНАЛА ПОИСКА (функция 9 ТЗ).
+
+    НЕ путать с Observation: Observation - запись БАЗЫ НАБЛЮДЕНИЙ, то
+    есть то, В ЧЁМ ищем (функция 8 ТЗ); SearchQuery - то, ЧТО искали и когда.
+    Это разные сущности с разным жизненным циклом: база наблюдений растёт
+    осознанно (кнопка "Сохранить как наблюдение", пакетное пополнение), а
+    журнал пишется автоматически при каждом поиске и ограничен по размеру
+    (settings.search_history_max_items).
+
+    Вектор запроса хранится затем, чтобы повторный поиск из истории не
+    требовал ни исходного изображения, ни запуска моделей: сравнение идёт
+    по сохранённому вектору с ТЕКУЩИМ содержимым базы наблюдений
+    (поэтому результат повторного поиска может отличаться от исходного -
+    в базе могли появиться или исчезнуть записи).
+    """
+
+    __tablename__ = "search_queries"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+
+    # Путь к кропу, по которому искали (для превью в истории). Полный кадр
+    # не хранится - он не нужен для повторного поиска и занимал бы место.
+    crop_path: Mapped[str] = mapped_column(String, nullable=False)
+
+    # Рамка выбранного ТС на ИСХОДНОМ кадре (как и у Observation).
+    bbox_x1: Mapped[int] = mapped_column(Integer, nullable=False)
+    bbox_y1: Mapped[int] = mapped_column(Integer, nullable=False)
+    bbox_x2: Mapped[int] = mapped_column(Integer, nullable=False)
+    bbox_y2: Mapped[int] = mapped_column(Integer, nullable=False)
+
+    embedding: Mapped[list] = mapped_column(Vector(EMBEDDING_DIM), nullable=False)
+
+    top_k: Mapped[int] = mapped_column(Integer, nullable=False)
+    # Итог поиска на момент выполнения - для списка истории без перезапуска поиска.
+    result_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    top_similarity: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False,
+        index=True,  # список истории всегда сортируется по времени
+    )
+
+    @property
+    def bbox(self) -> dict:
+        return {"x1": self.bbox_x1, "y1": self.bbox_y1, "x2": self.bbox_x2, "y2": self.bbox_y2}
+
+    def __repr__(self) -> str:
+        return f"<SearchQuery id={self.id} created_at={self.created_at}>"

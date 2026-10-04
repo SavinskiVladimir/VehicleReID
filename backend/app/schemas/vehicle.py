@@ -7,7 +7,8 @@ Pydantic-схемы для API слоя.
     7. Формирование и выдача результата -> N кандидатов с превью и
        значением метрики сходства пользователю.
     8. Добавление нового наблюдения в базу.
-    9. Хранение и просмотр истории наблюдений.
+    9. Хранение и просмотр истории: журнал выполненных поисков с
+       возможностью повторного поиска (отдельно от БАЗЫ НАБЛЮДЕНИЙ).
 
 Эти схемы не зависят от конкретной СУБД/векторного индекса (pgvector) -
 они описывают только внешний контракт API, согласно ТЗ п.1.3.2.1:
@@ -20,7 +21,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -111,7 +112,7 @@ class ObservationCreate(BaseModel):
 
 
 class ObservationOut(BaseModel):
-    """Одно сохранённое наблюдение (используется и в истории, и в результатах поиска)."""
+    """Одно наблюдение из БАЗЫ НАБЛЮДЕНИЙ (используется в её списке и в результатах поиска)."""
 
     id: uuid.UUID
     image_path: str
@@ -137,16 +138,43 @@ class SearchResponse(BaseModel):
 
     query_bbox: BoundingBox
     results: List[SearchResultItem]
+    # id записи в журнале поиска (None, если запись не удалось сделать -
+    # поиск при этом всё равно выполнен: журнал вторичен по отношению к нему).
+    query_id: Optional[uuid.UUID] = None
 
     @property
     def top_k(self) -> int:
         return len(self.results)
 
 
-class ObservationHistoryResponse(BaseModel):
-    """История ранее загруженных наблюдений (функция 9 ТЗ), с пагинацией."""
+class ObservationListResponse(BaseModel):
+    """Список записей БАЗЫ НАБЛЮДЕНИЙ с пагинацией."""
 
     items: List[ObservationOut]
+    total: int
+    limit: int
+    offset: int
+
+
+class SearchHistoryItem(BaseModel):
+    """Одна запись ЖУРНАЛА ПОИСКА (функция 9 ТЗ): что искали, когда и с каким итогом."""
+
+    id: uuid.UUID
+    created_at: datetime
+    bbox: BoundingBox
+    top_k: int
+    result_count: int
+    top_similarity: Optional[float] = Field(
+        default=None, description="Лучшее сходство среди найденных на момент поиска (None, если ничего не найдено)"
+    )
+
+    model_config = {"from_attributes": True}
+
+
+class SearchHistoryResponse(BaseModel):
+    """Страница журнала поиска."""
+
+    items: List[SearchHistoryItem]
     total: int
     limit: int
     offset: int

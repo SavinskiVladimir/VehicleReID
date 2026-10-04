@@ -13,8 +13,10 @@ from pydantic import ValidationError
 from backend.app.schemas.vehicle import (
     BoundingBox,
     ObservationCreate,
-    ObservationHistoryResponse,
+    ObservationListResponse,
     ObservationOut,
+    SearchHistoryItem,
+    SearchHistoryResponse,
     SearchResponse,
     SearchResultItem,
 )
@@ -122,9 +124,45 @@ class TestSearchResponse:
         assert response.top_k == 2
 
 
-class TestObservationHistoryResponse:
+class TestObservationListResponse:
     def test_pagination_fields(self):
-        response = ObservationHistoryResponse(items=[], total=42, limit=10, offset=20)
+        response = ObservationListResponse(items=[], total=42, limit=10, offset=20)
         assert response.total == 42
         assert response.limit == 10
         assert response.offset == 20
+
+
+class TestSearchHistorySchemas:
+    def test_item_builds_from_orm_like_object_and_hides_internals(self):
+        class FakeQuery:
+            id = uuid.uuid4()
+            created_at = datetime.now(timezone.utc)
+            bbox = {"x1": 0, "y1": 0, "x2": 10, "y2": 10}
+            top_k = 10
+            result_count = 4
+            top_similarity = 0.91
+            crop_path = "/server/secret/path.jpg"      # не должно попасть в схему
+            embedding = [0.1] * 512                    # и это тоже
+
+        item = SearchHistoryItem.model_validate(FakeQuery())
+        dumped = item.model_dump()
+
+        assert item.top_similarity == 0.91
+        assert "crop_path" not in dumped and "embedding" not in dumped
+
+    def test_top_similarity_is_optional(self):
+        item = SearchHistoryItem(
+            id=uuid.uuid4(), created_at=datetime.now(timezone.utc),
+            bbox=BoundingBox(x1=0, y1=0, x2=1, y2=1), top_k=10, result_count=0,
+        )
+        assert item.top_similarity is None
+
+    def test_page(self):
+        page = SearchHistoryResponse(items=[], total=5, limit=2, offset=2)
+        assert page.total == 5
+
+    def test_search_response_query_id_is_optional(self):
+        response = SearchResponse(query_bbox=BoundingBox(x1=0, y1=0, x2=1, y2=1), results=[])
+        assert response.query_id is None
+        qid = uuid.uuid4()
+        assert SearchResponse(query_bbox=BoundingBox(x1=0, y1=0, x2=1, y2=1), results=[], query_id=qid).query_id == qid

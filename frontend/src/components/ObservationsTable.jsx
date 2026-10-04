@@ -1,18 +1,18 @@
 import { cropUrl } from "../utils/files";
-import "./HistoryTable.css";
+import "./ObservationsTable.css";
 
-export default function HistoryTable({ items, onDelete, deletingId }) {
+export default function ObservationsTable({ items, onDelete, deletingId }) {
   if (items.length === 0) {
     return (
-      <div className="history-table history-table--empty">
-        <p>Наблюдений пока нет.</p>
-        <p className="history-table__hint">Сохранённые записи появятся здесь после поиска.</p>
+      <div className="observations-table observations-table--empty">
+        <p>База наблюдений пуста.</p>
+        <p className="observations-table__hint">Добавьте записи кнопкой «Сохранить как наблюдение» после поиска.</p>
       </div>
     );
   }
 
   return (
-    <table className="history-table">
+    <table className="observations-table">
       <thead>
         <tr>
           <th></th>
@@ -25,18 +25,18 @@ export default function HistoryTable({ items, onDelete, deletingId }) {
         {items.map((obs) => (
           <tr key={obs.id}>
             <td>
-              <img className="history-table__thumb" src={cropUrl(obs.id)} alt="" loading="lazy" />
+              <img className="observations-table__thumb" src={cropUrl(obs.id)} alt="" loading="lazy" />
             </td>
             <td>
               {new Date(obs.created_at).toLocaleString("ru-RU", { dateStyle: "medium", timeStyle: "short" })}
             </td>
-            <td className="num history-table__bbox">
+            <td className="num observations-table__bbox">
               {obs.bbox.x1}, {obs.bbox.y1} – {obs.bbox.x2}, {obs.bbox.y2}
             </td>
             <td>
               <button
                 type="button"
-                className="btn btn-danger history-table__delete"
+                className="btn btn-danger observations-table__delete"
                 onClick={() => onDelete(obs.id)}
                 disabled={deletingId === obs.id}
               >

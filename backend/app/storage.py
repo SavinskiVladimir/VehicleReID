@@ -187,3 +187,24 @@ class FileStorage:
             path.unlink(missing_ok=True)
         except ValueError:
             pass  # некорректный upload_id - нечего удалять
+
+    def delete_permanent(self, path_str: str) -> bool:
+        """
+        Удаляет файл из постоянного хранилища. Путь приходит из БД, поэтому
+        удаляются ТОЛЬКО файлы внутри permanent_dir: запись с путём вроде
+        D:\\data\\VeRi\\... (как у наблюдений из demo_populate_db.py - файлы
+        исходного датасета) или с "../" не должна приводить к удалению
+        чего-либо за пределами хранилища.
+
+        Returns:
+            True, если файл был удалён; False, если его нет или путь вне хранилища.
+        """
+        try:
+            path = Path(path_str).resolve()
+            path.relative_to(self.permanent_dir.resolve())
+        except (ValueError, OSError):
+            return False
+        if not path.is_file():
+            return False
+        path.unlink()
+        return True

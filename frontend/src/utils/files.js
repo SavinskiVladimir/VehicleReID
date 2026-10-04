@@ -12,3 +12,8 @@ export function cropUrl(observationId) {
 export function imageUrl(observationId) {
   return `/api/observations/${observationId}/image`;
 }
+
+/** Кроп, по которому выполнялся поиск (запись журнала поиска). */
+export function queryCropUrl(queryId) {
+  return `/api/search-history/${queryId}/crop`;
+}

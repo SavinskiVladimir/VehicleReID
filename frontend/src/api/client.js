@@ -65,8 +65,8 @@ export async function addObservation(uploadId, detectionIndex, adminToken) {
   return data;
 }
 
-// --- Функция 9 ТЗ: история наблюдений ---
-export async function getHistory(limit = 20, offset = 0) {
+// --- База наблюдений: список записей, в которых ищем ---
+export async function getObservations(limit = 20, offset = 0) {
   const { data } = await api.get("/observations", { params: { limit, offset } });
   return data; // { items, total, limit, offset }
 }
@@ -76,4 +76,25 @@ export async function deleteObservation(observationId, adminToken) {
   await api.delete(`/observations/${observationId}`, {
     headers: { "X-Admin-Token": adminToken },
   });
+}
+
+// --- История поиска (функция 9 ТЗ) - журнал выполненных поисков, ОТДЕЛЬНО от базы наблюдений ---
+export async function getSearchHistory(limit = 10, offset = 0) {
+  const { data } = await api.get("/search-history", { params: { limit, offset } });
+  return data; // { items: [{ id, created_at, bbox, top_k, result_count, top_similarity }], total, limit, offset }
+}
+
+// Повторный поиск по сохранённому вектору: ни файл, ни токен не нужны.
+export async function rerunSearch(queryId) {
+  const { data } = await api.post(`/search-history/${queryId}/search`);
+  return data; // как у обычного поиска: { query_bbox, results, query_id }
+}
+
+export async function deleteSearchQuery(queryId, adminToken) {
+  await api.delete(`/search-history/${queryId}`, { headers: { "X-Admin-Token": adminToken } });
+}
+
+export async function clearSearchHistory(adminToken) {
+  const { data } = await api.delete("/search-history", { headers: { "X-Admin-Token": adminToken } });
+  return data; // { deleted: N }
 }
