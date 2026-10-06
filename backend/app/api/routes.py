@@ -34,7 +34,7 @@ import uuid
 from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
+from fastapi import APIRouter, Depends, File, HTTPException, Query, Response, UploadFile, status
 from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -60,6 +60,7 @@ from ..schemas.vehicle import (
 from ..services.detector import DetectorService
 from ..services.search_service import SearchService
 from ..storage import FileStorage, UploadNotFoundError, UploadValidationError
+from ..timing import StageTimer
 
 router = APIRouter(tags=["vehicles"])
 logger = logging.getLogger(__name__)
@@ -84,19 +85,28 @@ def _image_file_response(path_str: str) -> FileResponse:
     return FileResponse(path)
 
 
+def _publish_timing(http_response: Response, timer: StageTimer, name: str) -> None:
+    """Замеры этапов - в заголовок Server-Timing (виден в DevTools) и одной строкой в лог."""
+    http_response.headers["Server-Timing"] = timer.server_timing()
+    logger.info("%s: %s", name, timer.summary())
+
+
 def _bbox_to_schema(bbox: tuple) -> BoundingBox:
     x1, y1, x2, y2 = bbox
     return BoundingBox(x1=x1, y1=y1, x2=x2, y2=y2)
 
 
-def _get_selected_detection(detector: DetectorService, image, detection_index: int):
+def _get_selected_detection(
+    detector: DetectorService, image, detection_index: int, timer: Optional[StageTimer] = None
+):
     """
     Общая логика для /search и /observations: повторная детекция +
     валидация индекса выбранной машины. Поднимает HTTPException с
     понятным сообщением при некорректном индексе, а не падает с
     IndexError.
     """
-    detections = detector.detect(image)
+    with (timer or StageTimer()).stage("detect"):
+        detections = detector.detect(image)
     if not detections:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -113,21 +123,26 @@ def _get_selected_detection(detector: DetectorService, image, detection_index: i
 
 @router.post("/detect", response_model=DetectResponse)
 async def detect_vehicles(
+    http_response: Response,
     file: UploadFile = File(...),
     detector: DetectorService = Depends(get_detector_service),
     storage: FileStorage = Depends(get_file_storage),
 ) -> DetectResponse:
     """Функции 1-2 ТЗ: приём изображения + детекция ТС."""
+    timer = StageTimer()
     try:
-        image_bytes = await storage.validate_and_read(file)
+        with timer.stage("read"):
+            image_bytes = await storage.validate_and_read(file)
     except UploadValidationError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
-    upload_id = storage.save_temp(image_bytes)
+    with timer.stage("save"):
+        upload_id = storage.save_temp(image_bytes)
 
     try:
         image = storage.load_temp(upload_id)
-        detections = detector.detect(image)
+        with timer.stage("detect"):
+            detections = detector.detect(image)
     except Exception:
         # Полный traceback - в лог сервера (для диагностики), пользователю
         # - только общее сообщение (ТЗ п.1.1.2.4: "корректное сообщение об
@@ -138,6 +153,7 @@ async def detect_vehicles(
             detail="Не удалось обработать изображение на этапе детекции.",
         )
 
+    _publish_timing(http_response, timer, "detect")
     return DetectResponse(
         upload_id=upload_id,
         detections=[
@@ -189,6 +205,7 @@ async def _record_search_best_effort(
 
 @router.post("/search", response_model=SearchResponse)
 async def search_vehicle(
+    http_response: Response,
     body: SearchRequest,
     detector: DetectorService = Depends(get_detector_service),
     search_service: SearchService = Depends(get_search_service),
@@ -201,19 +218,24 @@ async def search_vehicle(
     поиск записывается в журнал (функция 9) - автоматически и без влияния на
     сам результат.
     """
+    timer = StageTimer()
     try:
-        image = storage.load_temp(body.upload_id)
+        with timer.stage("load"):
+            image = storage.load_temp(body.upload_id)
     except UploadNotFoundError as e:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
 
     chosen = _get_selected_detection(detector, image, body.detection_index)
-    crop = detector.crop_with_padding(image, chosen.bbox)
+    with timer.stage("crop"):
+        crop = detector.crop_with_padding(image, chosen.bbox)
 
     try:
-        embedding = search_service.compute_embedding(crop)
-        response = await search_service.search_by_embedding(
-            session, embedding, chosen.bbox, body.top_k
-        )
+        with timer.stage("embed"):
+            embedding = search_service.compute_embedding(crop)
+        with timer.stage("search"):
+            response = await search_service.search_by_embedding(
+                session, embedding, chosen.bbox, body.top_k
+            )
     except HTTPException:
         raise
     except Exception:
@@ -226,10 +248,12 @@ async def search_vehicle(
             detail="Сервис поиска временно недоступен. Попробуйте позже.",
         )
 
-    query_id = await _record_search_best_effort(
-        search_service, storage, session, settings, crop,
-        chosen.bbox, embedding, body.top_k, response,
-    )
+    with timer.stage("history"):
+        query_id = await _record_search_best_effort(
+            search_service, storage, session, settings, crop,
+            chosen.bbox, embedding, body.top_k, response,
+        )
+    _publish_timing(http_response, timer, "search")
     return response.model_copy(update={"query_id": query_id})
 
 
