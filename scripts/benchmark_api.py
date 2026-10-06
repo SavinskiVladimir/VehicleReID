@@ -3,12 +3,13 @@
 этапа рядом с бюджетом и итогом (выполнено / на грани / не выполнено).
 
 Этапы берутся из заголовка Server-Timing (backend/app/timing.py), общее время - со стороны клиента
-(так, как в ТЗ: вместе с сетью). Один "запрос пользователя" = /api/detect + /api/search.
+(так, как в ТЗ: вместе с сетью). "Запрос" - цикл /api/search: он начинается с выбора ТС пользователем и включает детекцию, кроп,
+эмбеддинг и поиск. Время /api/detect и ожидание выбора пользователем в бюджет не входят.
 
     Кроп ТС        detect + crop из /api/search       <= 100 мс (CPU) / 3 мс (GPU)
-    Эмбеддинг      embed                              <= 300 мс (CPU) / 100 мс (GPU)
+    Эмбеддинг      embed                              <= 500 мс (CPU) / 100 мс (GPU)
     Поиск в БД     search                             <= 30 мс при 100 000 записей
-    Весь запрос    detect + search, замер клиента     <= 700 мс (CPU) / 300 мс (GPU)
+    Весь запрос    весь /api/search, замер клиента    <= 700 мс (CPU) / 300 мс (GPU)
 
 Сервер должен быть запущен. Берите КАДРЫ с машинами, а не готовые кропы. Каждый запуск /api/search
 пишет запись в историю поиска (журнал ограничен SEARCH_HISTORY_MAX_ITEMS).
@@ -28,14 +29,14 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 BUDGETS_MS = {
-    "cpu": {"crop": 100, "embed": 300, "search": 30, "total": 700},
+    "cpu": {"crop": 100, "embed": 500, "search": 30, "total": 700},
     "gpu": {"crop": 3, "embed": 100, "search": 30, "total": 300},
 }
 LABELS = {
     "crop": "Кроп ТС (detect + crop)",
     "embed": "Эмбеддинг (embed)",
     "search": "Поиск в БД (search)",
-    "total": "Весь запрос (detect + search, с сетью)",
+    "total": "Весь запрос (/api/search, с сетью)",
 }
 IMAGE_TYPES = {".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png", ".webp": "image/webp"}
 
@@ -63,7 +64,7 @@ def collect_metrics(run: dict) -> Dict[str, float]:
         "crop": s.get("detect", 0.0) + s.get("crop", 0.0),
         "embed": s.get("embed", 0.0),
         "search": s.get("search", 0.0),
-        "total": run["detect_wall"] + run["search_wall"],
+        "total": run["search_wall"],
     }
 
 

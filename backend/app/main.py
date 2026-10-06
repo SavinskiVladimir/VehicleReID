@@ -38,6 +38,7 @@ from .startup_checks import (
     check_embedding_dimension,
     check_model_files,
     inspect_database,
+    StartupCheckError,
 )
 from .storage import FileStorage
 
@@ -70,6 +71,19 @@ def _configure_app_logging() -> None:
     package_logger.setLevel(logging.INFO)
 
 
+def _load_model(title: str, path: str, factory):
+    """Файл модели есть, но не загружается (повреждён, экспортирован несовместимой версией): понятная
+    ошибка запуска вместо сырого traceback onnxruntime."""
+    try:
+        return factory()
+    except Exception as exc:
+        raise StartupCheckError(
+            f"Не удалось загрузить модель ({title}): {path}\n"
+            f"Файл повреждён или экспортирован несовместимой версией. Переэкспортируйте модель (см. README, шаг 5).\n"
+            f"Исходная ошибка: {type(exc).__name__}: {exc}"
+        ) from exc
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     settings = get_settings()
@@ -79,22 +93,25 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     check_model_files(settings)
 
     # --- Слой хранения ---
-    engine = create_async_engine(settings.database_url, echo=False)
+    # pool_pre_ping: перед выдачей соединения проверяется, что оно живое. Без этого после рестарта БД
+    # пул отдавал бы мёртвые соединения, и первый запрос после восстановления БД падал бы с 503.
+    engine = create_async_engine(settings.database_url, echo=False, pool_pre_ping=True)
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
 
     # --- ML-сервисы - загружаются ОДИН РАЗ здесь, переиспользуются на
     # все последующие запросы через dependencies.py ---
-    detector_service = DetectorService(
+    detector_service = _load_model("детектор", settings.detector_model_path, lambda: DetectorService(
         model_path=settings.detector_model_path,
         confidence_threshold=settings.detector_confidence_threshold,
         iou_threshold=settings.detector_iou_threshold,
         device=settings.device,
         padding_fraction=settings.padding_fraction,
-    )
+    ))
     image_service = ImageService(image_size=settings.reid_image_size)
-    embedder_service = ReIDEmbedderService(
-        model_path=settings.reid_model_path, device=settings.device
-    )
+    embedder_service = _load_model("ReID-экстрактор", settings.reid_model_path, lambda: ReIDEmbedderService(
+        model_path=settings.reid_model_path, device=settings.device,
+        intra_op_threads=settings.reid_intra_op_threads,
+    ))
     search_service = SearchService(image_service=image_service, embedder=embedder_service)
 
     # Размерность эмбеддинга модели должна совпасть со схемой БД -

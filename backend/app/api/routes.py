@@ -133,11 +133,10 @@ async def detect_vehicles(
     try:
         with timer.stage("read"):
             image_bytes = await storage.validate_and_read(file)
+        with timer.stage("save"):
+            upload_id = storage.save_temp(image_bytes)  # битый или обрезанный файл -> UploadValidationError
     except UploadValidationError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
-
-    with timer.stage("save"):
-        upload_id = storage.save_temp(image_bytes)
 
     try:
         image = storage.load_temp(upload_id)
@@ -205,8 +204,8 @@ async def _record_search_best_effort(
 
 @router.post("/search", response_model=SearchResponse)
 async def search_vehicle(
-    http_response: Response,
     body: SearchRequest,
+    http_response: Response,
     detector: DetectorService = Depends(get_detector_service),
     search_service: SearchService = Depends(get_search_service),
     storage: FileStorage = Depends(get_file_storage),
@@ -225,7 +224,7 @@ async def search_vehicle(
     except UploadNotFoundError as e:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
 
-    chosen = _get_selected_detection(detector, image, body.detection_index)
+    chosen = _get_selected_detection(detector, image, body.detection_index, timer)
     with timer.stage("crop"):
         crop = detector.crop_with_padding(image, chosen.bbox)
 
@@ -296,6 +295,9 @@ async def add_observation(
         )
     except Exception:
         logger.exception("Ошибка при сохранении наблюдения (upload_id=%s)", body.upload_id)
+        # Файлы без записи в БД не оставляем; временная загрузка сохраняется - пользователь повторит попытку.
+        storage.delete_permanent(image_path)
+        storage.delete_permanent(crop_path)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Не удалось сохранить наблюдение - хранилище временно недоступно.",

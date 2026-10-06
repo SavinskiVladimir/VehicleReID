@@ -151,7 +151,10 @@ class FileStorage:
         # всё равно понимает любой исходный формат на вход, но хранить
         # удобнее единообразно).
         from io import BytesIO
-        image = Image.open(BytesIO(image_bytes)).convert("RGB")
+        try:
+            image = Image.open(BytesIO(image_bytes)).convert("RGB")
+        except Exception as exc:  # битый или обрезанный файл, не изображение, "бомба декомпрессии"
+            raise UploadValidationError("Файл повреждён или не является изображением.") from exc
         image.save(path, format="JPEG", quality=95)
 
         return upload_id
@@ -186,7 +189,10 @@ class FileStorage:
         # uuid.UUID(...) - валидация формата upload_id ДО построения
         # пути: без неё upload_id вида "../../etc/passwd" мог бы
         # вывести путь за пределы temp_dir (path traversal).
-        validated = uuid.UUID(upload_id)
+        try:
+            validated = uuid.UUID(upload_id)
+        except (ValueError, AttributeError, TypeError):
+            raise UploadNotFoundError(f"upload_id={upload_id!r} имеет недопустимый формат.")
         return self.temp_dir / f"{validated}.jpg"
 
     def save_permanent(self, image: Image.Image, subdir: str) -> Tuple[str, str]:
@@ -216,7 +222,7 @@ class FileStorage:
         try:
             path = self._temp_path(upload_id)
             path.unlink(missing_ok=True)
-        except ValueError:
+        except UploadNotFoundError:
             pass  # некорректный upload_id - нечего удалять
 
     def delete_permanent(self, path_str: str) -> bool:
