@@ -5,6 +5,8 @@
 """
 
 import io
+import uuid
+import shutil
 import time
 
 import pytest
@@ -183,3 +185,61 @@ class TestDeletePermanent:
         directory.mkdir(parents=True, exist_ok=True)
         assert storage.delete_permanent(str(directory)) is False
         assert directory.exists()
+
+
+def _aged_upload(storage, age_seconds, name=None):
+    import os
+    path = storage.temp_dir / (name or f"{uuid.uuid4()}.jpg")
+    path.write_bytes(b"x")
+    old = time.time() - age_seconds
+    os.utime(path, (old, old))
+    return path
+
+
+class TestCleanupExpiredTemp:
+    def test_removes_only_expired_uploads_and_counts_them(self, storage):
+        expired1, expired2 = _aged_upload(storage, 3600), _aged_upload(storage, 120)
+        fresh = _aged_upload(storage, 5)
+
+        assert storage.cleanup_expired_temp() == 2
+        assert not expired1.exists() and not expired2.exists() and fresh.exists()
+
+    def test_foreign_files_in_the_folder_are_left_alone(self, storage):
+        not_uuid = _aged_upload(storage, 3600, name="notes.jpg")
+        other_type = _aged_upload(storage, 3600, name=f"{uuid.uuid4()}.txt")
+
+        assert storage.cleanup_expired_temp() == 0
+        assert not_uuid.exists() and other_type.exists()
+
+    def test_empty_or_missing_folder_is_not_an_error(self, storage):
+        assert storage.cleanup_expired_temp() == 0
+        shutil.rmtree(storage.temp_dir)
+        assert storage.cleanup_expired_temp() == 0
+
+    def test_save_temp_cleans_up_old_uploads(self, storage):
+        expired = _aged_upload(storage, 3600)
+        storage.save_temp(_png_bytes())
+        assert not expired.exists()
+
+    def test_cleanup_on_save_is_throttled(self, storage):
+        storage.save_temp(_png_bytes())                       # первая загрузка запускает очистку
+        expired_later = _aged_upload(storage, 3600)
+
+        storage.save_temp(_png_bytes())                       # в пределах интервала - не сканируем папку заново
+        assert expired_later.exists()
+
+        storage.cleanup_interval_seconds = 0                  # интервал истёк
+        storage.save_temp(_png_bytes())
+        assert not expired_later.exists()
+
+    def test_fresh_uploads_survive_cleanup_on_save(self, storage):
+        first = storage.save_temp(_png_bytes())
+        storage.cleanup_interval_seconds = 0
+        storage.save_temp(_png_bytes())
+        assert storage.load_temp(first) is not None
+
+
+def _png_bytes():
+    buf = io.BytesIO()
+    Image.new("RGB", (16, 16), (10, 20, 30)).save(buf, format="JPEG")
+    return buf.getvalue()

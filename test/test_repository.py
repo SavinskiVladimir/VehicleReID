@@ -356,3 +356,127 @@ class TestPruneSearchQueries:
         assert await repository.prune_search_queries(session, keep=500) == []
         _, total = await repository.list_search_queries(session)
         assert total == 1
+
+
+# ---------------------------------------------------------------------------
+# Управление транзакцией (пакетная загрузка) и таблица ingest_sources
+# ---------------------------------------------------------------------------
+
+class TestCommitControl:
+    @pytest.mark.asyncio
+    async def test_uncommitted_observation_is_invisible_to_others_and_can_be_rolled_back(self, session):
+        from sqlalchemy.ext.asyncio import async_sessionmaker
+        other_factory = async_sessionmaker(session.bind, expire_on_commit=False)
+
+        obs = await repository.add_observation(
+            session, "a.jpg", "a_c.jpg", (0, 0, 1, 1), _make_embedding(0), commit=False
+        )
+
+        assert obs.id is not None and obs.created_at is not None   # проставлены при flush
+        async with other_factory() as other:
+            _, total = await repository.list_observations(other)
+            assert total == 0                                      # чужая сессия записи ещё не видит
+
+        await session.rollback()
+        _, total = await repository.list_observations(session)
+        assert total == 0                                          # откат убрал запись
+
+    @pytest.mark.asyncio
+    async def test_commit_false_persists_after_explicit_commit(self, session):
+        await repository.add_observation(
+            session, "a.jpg", "a_c.jpg", (0, 0, 1, 1), _make_embedding(0), commit=False
+        )
+        await session.commit()
+        _, total = await repository.list_observations(session)
+        assert total == 1
+
+    @pytest.mark.asyncio
+    async def test_default_still_commits(self, session):
+        from sqlalchemy.ext.asyncio import async_sessionmaker
+        other_factory = async_sessionmaker(session.bind, expire_on_commit=False)
+
+        await repository.add_observation(session, "a.jpg", "a_c.jpg", (0, 0, 1, 1), _make_embedding(0))
+
+        async with other_factory() as other:
+            _, total = await repository.list_observations(other)
+            assert total == 1
+
+
+class TestIngestSources:
+    @pytest.mark.asyncio
+    async def test_roundtrip_with_observation_ids(self, session):
+        ids = [uuid.uuid4(), uuid.uuid4()]
+        await repository.add_ingest_source(session, "a" * 64, "/in/x.png", "all", ids)
+        await session.commit()
+
+        fetched = await repository.get_ingest_source(session, "a" * 64)
+
+        assert fetched.source_path == "/in/x.png" and fetched.mode == "all"
+        assert list(fetched.observation_ids) == ids       # список UUID сохраняется как есть и в том же порядке
+        assert fetched.created_at is not None
+
+    @pytest.mark.asyncio
+    async def test_empty_observation_list_is_allowed(self, session):
+        await repository.add_ingest_source(session, "b" * 64, "/in/empty.png", "all", [])
+        await session.commit()
+        assert list((await repository.get_ingest_source(session, "b" * 64)).observation_ids) == []
+
+    @pytest.mark.asyncio
+    async def test_unknown_hash_returns_none(self, session):
+        assert await repository.get_ingest_source(session, "f" * 64) is None
+
+    @pytest.mark.asyncio
+    async def test_delete_then_add_with_same_hash_in_one_transaction(self, session):
+        # Именно так работает --replace: удалить старую отметку и добавить новую одной транзакцией.
+        await repository.add_ingest_source(session, "c" * 64, "/old.png", "all", [uuid.uuid4()])
+        await session.commit()
+
+        await repository.delete_ingest_source(session, "c" * 64)
+        await repository.add_ingest_source(session, "c" * 64, "/new.png", "whole", [])
+        await session.commit()
+
+        fetched = await repository.get_ingest_source(session, "c" * 64)
+        assert fetched.source_path == "/new.png" and fetched.mode == "whole"
+
+
+class TestDeleteObservationsByIds:
+    async def _add(self, session, name, index):
+        obs = await repository.add_observation(
+            session, f"/s/images/{name}.jpg", f"/s/crops/{name}.jpg", (0, 0, 1, 1), _make_embedding(index)
+        )
+        return obs.id
+
+    @pytest.mark.asyncio
+    async def test_deletes_only_the_given_ones_and_returns_their_paths(self, session):
+        keep = await self._add(session, "keep", 0)
+        gone1 = await self._add(session, "gone1", 1)
+        gone2 = await self._add(session, "gone2", 2)
+
+        paths = await repository.delete_observations_by_ids(session, [gone1, gone2])
+        await session.commit()
+
+        assert sorted(paths) == [("/s/images/gone1.jpg", "/s/crops/gone1.jpg"),
+                                 ("/s/images/gone2.jpg", "/s/crops/gone2.jpg")]
+        items, total = await repository.list_observations(session)
+        assert total == 1 and items[0].id == keep
+
+    @pytest.mark.asyncio
+    async def test_unknown_ids_are_ignored_and_empty_list_is_a_noop(self, session):
+        existing = await self._add(session, "a", 0)
+
+        assert await repository.delete_observations_by_ids(session, []) == []
+        assert await repository.delete_observations_by_ids(session, [uuid.uuid4()]) == []
+        await session.commit()
+
+        _, total = await repository.list_observations(session)
+        assert total == 1
+        assert await repository.get_observation(session, existing) is not None
+
+    @pytest.mark.asyncio
+    async def test_does_not_commit_on_its_own(self, session):
+        obs_id = await self._add(session, "a", 0)
+
+        await repository.delete_observations_by_ids(session, [obs_id])
+        await session.rollback()          # откат возвращает удалённое: транзакцией управляет вызывающий
+
+        assert await repository.get_observation(session, obs_id) is not None

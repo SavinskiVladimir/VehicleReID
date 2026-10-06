@@ -62,6 +62,8 @@ class FileStorage:
         self.permanent_dir = Path(permanent_dir)
         self.max_upload_size_bytes = max_upload_size_bytes
         self.temp_ttl_seconds = temp_ttl_seconds
+        self.cleanup_interval_seconds = 60  # как часто save_temp запускает очистку
+        self._last_cleanup = 0.0
 
         self.temp_dir.mkdir(parents=True, exist_ok=True)
         self.permanent_dir.mkdir(parents=True, exist_ok=True)
@@ -106,12 +108,41 @@ class FileStorage:
 
         return data
 
+    def cleanup_expired_temp(self) -> int:
+        """
+        Удаляет просроченные временные загрузки (старше temp_ttl_seconds) и возвращает их число.
+        Раньше просроченный файл удалялся только при обращении к нему по upload_id, а загрузки,
+        к которым пользователь так и не вернулся (закрыл вкладку после /detect), копились вечно.
+        Трогает только файлы вида <uuid>.jpg: чужие файлы в папке остаются нетронутыми.
+        """
+        now, removed = time.time(), 0
+        try:
+            candidates = list(self.temp_dir.glob("*.jpg"))
+        except OSError:
+            return 0
+        for path in candidates:
+            try:
+                uuid.UUID(path.stem)
+                if now - path.stat().st_mtime > self.temp_ttl_seconds:
+                    path.unlink()
+                    removed += 1
+            except (ValueError, OSError):  # не наш файл либо удалён параллельно
+                continue
+        return removed
+
+    def _cleanup_if_due(self) -> None:
+        now = time.time()
+        if now - self._last_cleanup >= self.cleanup_interval_seconds:
+            self._last_cleanup = now
+            self.cleanup_expired_temp()
+
     def save_temp(self, image_bytes: bytes) -> str:
         """
         Сохраняет изображение во временное хранилище, возвращает
         upload_id для последующего обращения (между /api/detect и
         /api/search - без повторной передачи файла целиком).
         """
+        self._cleanup_if_due()  # не чаще раза в cleanup_interval_seconds
         upload_id = str(uuid.uuid4())
         path = self.temp_dir / f"{upload_id}.jpg"
 

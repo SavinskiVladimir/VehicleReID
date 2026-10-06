@@ -9,6 +9,7 @@ Settings создаётся с _env_file=None - тесты не должны з�
 Запуск: из корня проекта  ->  pytest tests/test_config.py
 """
 
+import os
 from pathlib import Path
 
 import pytest
@@ -105,3 +106,30 @@ class TestSearchHistoryLimit:
     def test_override_from_environment(self, monkeypatch):
         monkeypatch.setenv("SEARCH_HISTORY_MAX_ITEMS", "50")
         assert _settings().search_history_max_items == 50
+
+
+@pytest.fixture(scope="module")
+def simulate_dotenv_leak():
+    # Фикстура уровня модуля выполняется РАНЬШЕ функциональной изоляции из conftest -
+    # ровно как значения, попавшие в окружение при импорте тестового модуля.
+    with pytest.MonkeyPatch.context() as leak:
+        leak.setenv("ADMIN_API_KEY", "утекло-из-dotenv")
+        leak.setenv("ENFORCE_HTTPS", "true")
+        leak.setenv("REID_MODEL_PATH", "C:/чужая/модель.onnx")
+        yield
+
+
+@pytest.mark.usefixtures("simulate_dotenv_leak")
+class TestIsolationFromProcessEnvironment:
+    """
+    Утечка через os.environ: тестовые модули вызывают load_dotenv(), и он выгружает
+    в окружение ВЕСЬ .env разработчика. Автоматическая фикстура conftest.py убирает
+    эти значения перед каждым тестом.
+    """
+
+    def test_leaked_variables_are_removed_before_each_test(self):
+        assert os.environ.get("ADMIN_API_KEY") is None   # убрано изоляцией, а не просто игнорируется
+        settings = Settings()
+        assert settings.admin_api_key == DEFAULT_ADMIN_API_KEY
+        assert settings.enforce_https is False
+        assert "чужая" not in settings.reid_model_path

@@ -1,7 +1,7 @@
 """
 Точка входа FastAPI-приложения.
 
-Согласно ТЗ (п.1.3.2.1), HTTP-API-слой (этот файл + api/routes.py,
+Согласно ТЗ (п.1.1.2.1), HTTP-API-слой (этот файл + api/routes.py,
 который появится следующим модулем) зависит только от сервисного слоя
 (services/*.py) и слоя доступа к данным (db/repository.py), не от
 деталей реализации моделей/СУБД напрямую.
@@ -10,7 +10,7 @@ ML-модели (детектор, ReID-экстрактор) и движок Б
 при старте приложения через lifespan - не на каждый запрос, иначе
 задержка инференса складывалась бы ещё и со временем загрузки весов
 ONNX-моделей, многократно превышая бюджет ТЗ на запрос (700 мс CPU /
-300 мс GPU, п.1.3.2.2).
+300 мс GPU, п.1.1.2.2).
 
 Запуск (из корня проекта):
     uvicorn backend.app.main:app --reload
@@ -107,6 +107,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         max_upload_size_bytes=settings.max_upload_size_bytes,
         temp_ttl_seconds=settings.temp_upload_ttl_seconds,
     )
+    removed_uploads = file_storage.cleanup_expired_temp()  # хвосты прошлых запусков
+    if removed_uploads:
+        logger.info("Удалено просроченных временных загрузок: %d", removed_uploads)
 
     app.state.settings = settings
     app.state.engine = engine

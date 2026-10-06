@@ -10,10 +10,9 @@ jobs:
   pytest:
     runs-on: ubuntu-latest
 
-    # Сервис-контейнер PostgreSQL с расширением pgvector - нужен для
-    # интеграционных тестов backend/app/db/repository.py
-    # (tests/test_repository.py), которые проверяют реальные SQL-запросы
-    # (в т.ч. оператор косинусного расстояния pgvector), а не моки.
+    # Сервис-контейнер PostgreSQL с расширением pgvector: интеграционные тесты
+    # (репозиторий, пакетная загрузка, журнал поиска, /health) проверяют реальные
+    # SQL-запросы и схему, а не моки.
     services:
       postgres:
         image: pgvector/pgvector:pg16
@@ -45,19 +44,20 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-${{ hashFiles('requirements-test.txt') }}
+          key: ${{ runner.os }}-pip-${{ hashFiles('requirements-test.txt', 'constraints.txt') }}
           restore-keys: |
             ${{ runner.os }}-pip-
 
-      # CPU-only сборка PyTorch: в CI нет GPU, а CPU-версия значительно
-      # легче и быстрее скачивается, чем полная CUDA-сборка по умолчанию.
-      - name: Установка PyTorch (CPU-only)
+      # CPU-only сборка PyTorch: в CI нет GPU, а CPU-версия значительно легче полной
+      # CUDA-сборки по умолчанию. Версии torch/torchvision берутся из constraints.txt,
+      # чтобы CI запускал тесты на тех же версиях, на которых они проходили.
+      - name: Установка PyTorch (CPU-only, версии из constraints.txt)
         run: |
-          pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+          pip install $(grep -E '^(torch|torchvision)==' constraints.txt | tr '\n' ' ') --index-url https://download.pytorch.org/whl/cpu
 
-      - name: Установка остальных зависимостей
+      - name: Установка остальных зависимостей (версии закреплены constraints.txt)
         run: |
-          pip install -r requirements-test.txt
+          pip install -r requirements-test.txt -c constraints.txt
 
       - name: Включение расширения vector в тестовой БД
         run: |
@@ -66,3 +66,26 @@ jobs:
       - name: Запуск тестов
         run: |
           pytest -v
+
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - name: Checkout код
+        uses: actions/checkout@v4
+
+      - name: Настройка Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      # npm ci ставит РОВНО версии из package-lock.json (в отличие от npm install)
+      - name: Установка зависимостей
+        run: npm ci
+
+      - name: Сборка
+        run: npm run build

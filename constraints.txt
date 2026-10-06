@@ -1,0 +1,34 @@
+# Закреплённые версии Python-пакетов (D2 плана): воспроизводимая установка для Docker и CI.
+# Получены 2026-10-06 на Linux, Python 3.12.3, где проходят ВСЕ тесты проекта.
+# Закреплены прямые зависимости (backend/requirements.txt, requirements-test.txt) и пакеты, от версий
+# которых зависит поведение (torch, torchvision, numpy, starlette, pydantic-core, anyio, greenlet).
+#
+# Использование:
+#   pip install -r backend/requirements.txt -c constraints.txt
+# torch/torchvision здесь без суффикса сборки: CPU-колёса ставятся с --index-url
+# https://download.pytorch.org/whl/cpu (см. CI), GPU-колёса - с обычного индекса.
+# Обновление: поставить нужные версии, прогнать pytest, заново сформировать файл.
+anyio==4.15.1
+asyncpg==0.31.0
+fastapi==0.142.2
+greenlet==3.3.2
+httpx==0.28.1
+numpy==2.4.4
+onnx==1.23.1
+onnxruntime==1.24.4
+pgvector==0.5.0
+pillow==12.1.1
+pydantic==2.13.5
+pydantic-settings==2.15.0
+pydantic_core==2.46.5
+pytest==9.1.1
+pytest-asyncio==1.4.0
+python-dotenv==1.2.2
+python-multipart==0.0.32
+pyyaml==6.0.3
+sqlalchemy==2.1.1
+starlette==1.7.0
+torch==2.14.0
+torchvision==0.29.0
+ultralytics==8.4.163
+uvicorn==0.54.0

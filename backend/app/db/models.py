@@ -21,7 +21,7 @@ from typing import Optional
 
 from pgvector.sqlalchemy import Vector
 from sqlalchemy import DateTime, Float, Integer, String
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import ARRAY, UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 # Размерность эмбеддинга ДОЛЖНА совпадать с embedding_dim, с которым
@@ -141,3 +141,35 @@ class SearchQuery(Base):
 
     def __repr__(self) -> str:
         return f"<SearchQuery id={self.id} created_at={self.created_at}>"
+
+
+class IngestSource(Base):
+    """
+    Учёт файлов, загруженных пакетным пополнением базы (scripts/ingest_images.py).
+
+    Ключ - SHA-256 СОДЕРЖИМОГО файла, а не имя: переименованная или
+    перенесённая копия того же изображения не даст дубликатов в базе, а
+    повторный запуск на той же папке (в том числе после прерывания) обработает
+    только новое. В observation_ids хранятся id наблюдений, созданных из этого
+    файла, - это позволяет режиму --replace заменить их, а не наплодить дубли
+    при повторной загрузке с другими настройками (режим, порог детекции).
+
+    Запись создаётся и для файла, на котором ТС не найдено (observation_ids
+    пустой): повторный запуск не будет заново гонять по нему детектор.
+    """
+
+    __tablename__ = "ingest_sources"
+
+    source_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
+    # Последний встреченный путь - только для информации (файл могли перенести).
+    source_path: Mapped[str] = mapped_column(String, nullable=False)
+    mode: Mapped[str] = mapped_column(String(16), nullable=False)
+    observation_ids: Mapped[list] = mapped_column(
+        ARRAY(UUID(as_uuid=True)), nullable=False, default=list
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False
+    )
+
+    def __repr__(self) -> str:
+        return f"<IngestSource {self.source_hash[:12]} observations={len(self.observation_ids)}>"

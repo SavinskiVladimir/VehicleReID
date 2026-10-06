@@ -8,7 +8,7 @@
 
 Оркестрирует полную цепочку: кроп ТС -> предобработка (ImageService) ->
 эмбеддинг (ReIDEmbedderService) -> запрос к БД (repository.py) ->
-Pydantic-схема ответа (functions 6-9). Согласно ТЗ (п.1.3.2.1), routes.py
+Pydantic-схема ответа (functions 6-9). Согласно ТЗ (п.1.1.2.1), routes.py
 должен зависеть только от этого сервиса, а не от repository.py или
 ML-сервисов напрямую - SearchService и есть та единая точка входа,
 инкапсулирующая весь пайплайн для API-слоя.
@@ -130,19 +130,28 @@ class SearchService:
         crop_path: str,
         crop: Image.Image,
         bbox: Tuple[int, int, int, int],
+        embedding: Optional[Sequence[float]] = None,
+        commit: bool = True,
     ) -> ObservationOut:
         """
         Добавление нового наблюдения в базу (функция 8 ТЗ) - используется
         как в основном сценарии поиска (после показа результатов
         пользователю решено сохранить query как новое наблюдение), так
-        и в режиме пакетного пополнения базы без поиска (ТЗ п.1.3.2.1,
+        и в режиме пакетного пополнения базы без поиска (ТЗ п.1.1.2.1,
         "дополнительный режим - пакетное добавление изображений в базу
-        наблюдений без выполнения поиска").
+        наблюдений без выполнения поиска", см. IngestService).
+
+        Args:
+            embedding: уже посчитанный вектор. Пакетной загрузке нужно считать
+                ВСЕ эмбеддинги файла до записи чего-либо на диск и в БД, чтобы
+                сбой модели не оставлял половину файла загруженной.
+            commit: False - транзакцию закрывает вызывающий код.
         """
-        embedding = self.compute_embedding(crop)
+        if embedding is None:
+            embedding = self.compute_embedding(crop)
         observation = await repository.add_observation(
             session, image_path=image_path, crop_path=crop_path,
-            bbox=bbox, embedding=embedding,
+            bbox=bbox, embedding=embedding, commit=commit,
         )
         return ObservationOut.model_validate(observation)
 
@@ -165,9 +174,27 @@ class SearchService:
             offset=offset,
         )
 
-    async def delete_observation(self, session: AsyncSession, observation_id) -> bool:
-        """Удаление наблюдения (требование ТЗ п.1.3.2.3)."""
-        return await repository.delete_observation(session, observation_id)
+    async def delete_observation(self, session: AsyncSession, observation_id) -> Optional[List[str]]:
+        """
+        Удаление наблюдения (требование ТЗ п.1.1.2.3).
+
+        Returns:
+            None, если наблюдения нет. Иначе - пути файлов, ставших ненужными: кроп и полный кадр.
+            Кадр общий у всех ТС одного снимка (пакетная загрузка), поэтому он попадает в список
+            ТОЛЬКО если на него больше не ссылается ни одно наблюдение. Сами файлы удаляет
+            вызывающий код (FileStorage.delete_permanent, он же не трогает ничего вне хранилища).
+        """
+        observation = await repository.get_observation(session, observation_id)
+        if observation is None:
+            return None
+        image_path, crop_path = observation.image_path, observation.crop_path
+        await repository.delete_observation(session, observation_id)
+
+        unused = []
+        for path in dict.fromkeys([crop_path, image_path]):  # без повторов, порядок сохранён
+            if not await repository.observation_exists(session, path):
+                unused.append(path)
+        return unused
 
     # ------------------------------------------------------------------
     # Журнал поиска (функция 9 ТЗ) - ОТДЕЛЬНО от базы наблюдений

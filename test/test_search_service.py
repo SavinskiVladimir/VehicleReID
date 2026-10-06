@@ -103,11 +103,12 @@ class TestAddObservation:
     async def test_calls_repository_with_computed_embedding(self, search_service, monkeypatch):
         captured = {}
 
-        async def fake_add_observation(session, image_path, crop_path, bbox, embedding):
+        async def fake_add_observation(session, image_path, crop_path, bbox, embedding, commit):
             captured["image_path"] = image_path
             captured["crop_path"] = crop_path
             captured["bbox"] = bbox
             captured["embedding"] = embedding
+            captured["commit"] = commit
             return _fake_observation(image_path)
 
         monkeypatch.setattr(
@@ -123,6 +124,7 @@ class TestAddObservation:
         assert captured["crop_path"] == "crop.jpg"
         assert captured["bbox"] == (5, 5, 50, 60)
         assert captured["embedding"] == [0.1] * 512
+        assert captured["commit"] is True   # обычное добавление (API) по-прежнему коммитит само
         assert result.image_path == "frame.jpg"
 
 
@@ -149,18 +151,55 @@ class TestListObservations:
 
 
 class TestDeleteObservation:
-    @pytest.mark.asyncio
-    async def test_delegates_to_repository(self, search_service, monkeypatch):
-        async def fake_delete_observation(session, observation_id):
-            assert observation_id == "some-id"
+    @staticmethod
+    def _patch(monkeypatch, observation, still_referenced=()):
+        calls = []
+
+        async def fake_get(session, observation_id):
+            return observation
+
+        async def fake_delete(session, observation_id):
+            calls.append(observation_id)
             return True
 
-        monkeypatch.setattr(
-            search_service_module.repository, "delete_observation", fake_delete_observation
-        )
+        async def fake_exists(session, image_path):
+            return image_path in still_referenced
 
-        result = await search_service.delete_observation(session=object(), observation_id="some-id")
-        assert result is True
+        repo = search_service_module.repository
+        monkeypatch.setattr(repo, "get_observation", fake_get)
+        monkeypatch.setattr(repo, "delete_observation", fake_delete)
+        monkeypatch.setattr(repo, "observation_exists", fake_exists)
+        return calls
+
+    @pytest.mark.asyncio
+    async def test_unknown_observation_returns_none_and_deletes_nothing(self, search_service, monkeypatch):
+        calls = self._patch(monkeypatch, observation=None)
+        assert await search_service.delete_observation(object(), "missing") is None
+        assert calls == []
+
+    @pytest.mark.asyncio
+    async def test_returns_crop_and_full_frame_when_nothing_else_uses_them(self, search_service, monkeypatch):
+        obs = SimpleNamespace(image_path="/s/images/frame.jpg", crop_path="/s/crops/c1.jpg")
+        calls = self._patch(monkeypatch, obs)
+
+        files = await search_service.delete_observation(object(), "some-id")
+
+        assert calls == ["some-id"]
+        assert files == ["/s/crops/c1.jpg", "/s/images/frame.jpg"]
+
+    @pytest.mark.asyncio
+    async def test_frame_shared_with_other_observations_is_kept(self, search_service, monkeypatch):
+        # Несколько ТС одного кадра делят image_path: пока жива хоть одна запись, кадр удалять нельзя.
+        obs = SimpleNamespace(image_path="/s/images/frame.jpg", crop_path="/s/crops/c1.jpg")
+        self._patch(monkeypatch, obs, still_referenced={"/s/images/frame.jpg"})
+
+        assert await search_service.delete_observation(object(), "some-id") == ["/s/crops/c1.jpg"]
+
+    @pytest.mark.asyncio
+    async def test_same_path_for_image_and_crop_is_listed_once(self, search_service, monkeypatch):
+        obs = SimpleNamespace(image_path="/data/VeRi/0001.jpg", crop_path="/data/VeRi/0001.jpg")  # как у демо-скрипта
+        self._patch(monkeypatch, obs)
+        assert await search_service.delete_observation(object(), "some-id") == ["/data/VeRi/0001.jpg"]
 
 
 class TestGetObservation:
@@ -379,3 +418,41 @@ class TestSearchHistoryListing:
 
         assert await search_service.get_search_crop_path(object(), stored.id) == "/store/queries/q.jpg"
         assert await search_service.get_search_crop_path(object(), uuid.uuid4()) is None
+
+
+class TestAddObservationBatchOptions:
+    @pytest.mark.asyncio
+    async def test_given_embedding_is_used_without_running_the_model(self, monkeypatch):
+        # Сервис без image_service/embedder: compute_embedding при вызове упал бы.
+        service = SearchService(image_service=None, embedder=None)
+        captured = {}
+
+        async def fake_add(session, **kwargs):
+            captured.update(kwargs)
+            return _fake_observation("i.jpg")
+
+        monkeypatch.setattr(search_service_module.repository, "add_observation", fake_add)
+
+        await service.add_observation(
+            object(), "i.jpg", "c.jpg", crop=None, bbox=(0, 0, 1, 1), embedding=[0.2] * 512, commit=False
+        )
+
+        assert captured["embedding"] == [0.2] * 512
+        assert captured["commit"] is False
+
+    @pytest.mark.asyncio
+    async def test_default_computes_the_embedding_and_commits(self, search_service, monkeypatch):
+        captured = {}
+
+        async def fake_add(session, **kwargs):
+            captured.update(kwargs)
+            return _fake_observation("i.jpg")
+
+        monkeypatch.setattr(search_service_module.repository, "add_observation", fake_add)
+
+        await search_service.add_observation(
+            object(), "i.jpg", "c.jpg", crop=Image.new("RGB", (10, 10)), bbox=(0, 0, 1, 1)
+        )
+
+        assert captured["embedding"] == [0.1] * 512   # посчитан заглушкой FakeEmbedder
+        assert captured["commit"] is True

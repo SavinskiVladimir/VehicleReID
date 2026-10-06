@@ -168,6 +168,7 @@ class FakeSearchServiceOk:
     def __init__(self):
         self.add_observation_called_with = None
         self.delete_observation_result = True
+        self.delete_files = []                # файлы, ставшие ненужными после удаления
         self.observation_to_return = None  # для эндпоинтов отдачи изображений
         # --- журнал поиска ---
         self.record_search_calls = []
@@ -229,7 +230,7 @@ class FakeSearchServiceOk:
         return ObservationListResponse(items=[_fake_observation_out()], total=1, limit=limit, offset=offset)
 
     async def delete_observation(self, session, observation_id):
-        return self.delete_observation_result
+        return self.delete_files if self.delete_observation_result else None
 
     async def get_observation(self, session, observation_id):
         return self.observation_to_return
@@ -961,3 +962,48 @@ class TestDeleteSearchHistory:
         with client:
             assert client.delete(f"/api/search-history/{uuid.uuid4()}", headers={"X-Admin-Token": ADMIN_TOKEN}).status_code == 503
             assert client.delete("/api/search-history", headers={"X-Admin-Token": ADMIN_TOKEN}).status_code == 503
+
+
+class TestDeleteObservationRemovesFiles:
+    @staticmethod
+    def _files(tmp_path, *names):
+        paths = []
+        for name in names:
+            path = tmp_path / "permanent" / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(_make_jpeg_bytes())
+            paths.append(path)
+        return paths
+
+    def _delete(self, search_service):
+        client = _make_client(search_service=search_service)
+        with client:
+            return client.delete(f"/api/observations/{uuid.uuid4()}", headers={"X-Admin-Token": ADMIN_TOKEN})
+
+    def test_files_of_the_deleted_observation_are_removed_from_storage(self, tmp_path):
+        crop, image = self._files(tmp_path, "crops/c.jpg", "images/i.jpg")
+        search_service = FakeSearchServiceOk()
+        search_service.delete_files = [str(crop), str(image)]
+
+        assert self._delete(search_service).status_code == 200
+        assert not crop.exists() and not image.exists()
+
+    def test_files_outside_the_storage_are_never_removed(self, tmp_path):
+        # запись демо-скрипта указывает на файл исходного датасета
+        dataset_file = tmp_path / "VeRi" / "0001.jpg"
+        dataset_file.parent.mkdir()
+        dataset_file.write_bytes(_make_jpeg_bytes())
+        search_service = FakeSearchServiceOk()
+        search_service.delete_files = [str(dataset_file)]
+
+        assert self._delete(search_service).status_code == 200
+        assert dataset_file.exists()
+
+    def test_unknown_observation_removes_nothing(self, tmp_path):
+        (crop,) = self._files(tmp_path, "crops/c.jpg")
+        search_service = FakeSearchServiceOk()
+        search_service.delete_observation_result = False
+        search_service.delete_files = [str(crop)]
+
+        assert self._delete(search_service).status_code == 404
+        assert crop.exists()

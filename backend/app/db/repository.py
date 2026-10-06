@@ -22,7 +22,7 @@ from typing import List, Sequence, Tuple
 from sqlalchemy import delete, func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from .models import Observation, SearchQuery
+from .models import IngestSource, Observation, SearchQuery
 
 
 async def add_observation(
@@ -31,6 +31,7 @@ async def add_observation(
     crop_path: str,
     bbox: Tuple[int, int, int, int],
     embedding: Sequence[float],
+    commit: bool = True,
 ) -> Observation:
     """
     Добавляет новое наблюдение в базу (функция 8 ТЗ).
@@ -39,10 +40,12 @@ async def add_observation(
         bbox: (x1, y1, x2, y2) в пикселях исходного изображения.
         embedding: нормализованный вектор фиксированной размерности
             (см. EMBEDDING_DIM в models.py).
+        commit: False - только flush, транзакцию закрывает вызывающий код.
+            Нужно пакетной загрузке: все наблюдения одного файла и отметка о
+            его загрузке должны попасть в БД одной транзакцией (всё или ничего).
 
     Returns:
-        Созданный объект Observation (уже с присвоенным id и created_at
-        после commit).
+        Созданный объект Observation (уже с присвоенным id и created_at).
     """
     x1, y1, x2, y2 = bbox
     observation = Observation(
@@ -55,8 +58,11 @@ async def add_observation(
         embedding=list(embedding),
     )
     session.add(observation)
-    await session.commit()
-    await session.refresh(observation)
+    if commit:
+        await session.commit()
+        await session.refresh(observation)
+    else:
+        await session.flush()  # id и created_at проставляются при flush
     return observation
 
 
@@ -263,3 +269,64 @@ async def prune_search_queries(session: AsyncSession, keep: int) -> List[str]:
     await session.execute(delete(SearchQuery).where(SearchQuery.id.in_([r[0] for r in rows])))
     await session.commit()
     return [r[1] for r in rows]
+
+
+async def observation_exists(
+    session: AsyncSession,
+    image_path: str,
+) -> bool:
+    """Проверка существования записи для избежания дубликатов."""
+    stmt = select(Observation.id).where(
+        Observation.image_path == image_path
+    ).limit(1)
+
+    result = await session.execute(stmt)
+    return result.scalar_one_or_none() is not None
+
+# ---------------------------------------------------------------------------
+# Пакетная загрузка (таблица ingest_sources). Функции НЕ коммитят: транзакцию
+# закрывает вызывающий код (IngestService) - вместе с самими наблюдениями.
+# ---------------------------------------------------------------------------
+
+async def get_ingest_source(session: AsyncSession, source_hash: str) -> IngestSource | None:
+    return await session.get(IngestSource, source_hash)
+
+
+async def add_ingest_source(
+    session: AsyncSession,
+    source_hash: str,
+    source_path: str,
+    mode: str,
+    observation_ids: Sequence[uuid.UUID],
+) -> IngestSource:
+    source = IngestSource(
+        source_hash=source_hash,
+        source_path=source_path,
+        mode=mode,
+        observation_ids=list(observation_ids),
+    )
+    session.add(source)
+    await session.flush()
+    return source
+
+
+async def delete_ingest_source(session: AsyncSession, source_hash: str) -> None:
+    await session.execute(delete(IngestSource).where(IngestSource.source_hash == source_hash))
+
+
+async def delete_observations_by_ids(
+    session: AsyncSession, observation_ids: Sequence[uuid.UUID]
+) -> List[Tuple[str, str]]:
+    """
+    Удаляет наблюдения по списку id. Возвращает (image_path, crop_path) удалённых -
+    чтобы вызывающий код удалил файлы ПОСЛЕ успешного коммита (иначе при откате
+    транзакции записи остались бы без файлов). Несуществующие id игнорируются.
+    """
+    if not observation_ids:
+        return []
+    ids = list(observation_ids)
+    rows = (await session.execute(
+        select(Observation.image_path, Observation.crop_path).where(Observation.id.in_(ids))
+    )).all()
+    await session.execute(delete(Observation).where(Observation.id.in_(ids)))
+    return [(r[0], r[1]) for r in rows]

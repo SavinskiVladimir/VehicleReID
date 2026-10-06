@@ -303,15 +303,18 @@ async def list_observations(
 async def delete_observation(
     observation_id: uuid.UUID,
     search_service: SearchService = Depends(get_search_service),
+    storage: FileStorage = Depends(get_file_storage),
     session: AsyncSession = Depends(get_db_session),
 ) -> dict:
     """
     Удаление наблюдения (ТЗ п.1.1.2.3: "система хранения должна
-    обеспечивать возможность... удаления записей"). Административная
-    функция - требует X-Admin-Token.
+    обеспечивать возможность... удаления записей"). Вместе с записью удаляются её файлы
+    в хранилище (кроп и, если на него больше никто не ссылается, полный кадр). Файлы вне
+    хранилища (записи демо-скрипта указывают на файлы датасета) не затрагиваются.
+    Административная функция - требует X-Admin-Token.
     """
     try:
-        deleted = await search_service.delete_observation(session, observation_id)
+        unused_files = await search_service.delete_observation(session, observation_id)
     except Exception:
         logger.exception("Ошибка при удалении наблюдения (id=%s)", observation_id)
         raise HTTPException(
@@ -319,12 +322,14 @@ async def delete_observation(
             detail="Сервис хранения временно недоступен.",
         )
 
-    if not deleted:
+    if unused_files is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Наблюдение {observation_id} не найдено.",
         )
 
+    for path in unused_files:
+        storage.delete_permanent(path)
     return {"deleted": True, "id": str(observation_id)}
 
 

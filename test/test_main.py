@@ -5,7 +5,7 @@ DetectorService/ReIDEmbedderService подменяются заглушками 
 веса ONNX не нужны для проверки самого приложения - lifespan, CORS,
 health-check). DATABASE_URL для большинства тестов указывает на
 заведомо недоступный адрес - это намеренно: health-check должен
-корректно сообщать "degraded", а не ронять приложение (ТЗ п.1.3.2.4).
+корректно сообщать "degraded", а не ронять приложение (ТЗ п.1.1.2.4).
 Отдельный тест с РЕАЛЬНЫМ Postgres (TEST_DATABASE_URL) проверяет
 "здоровый" путь - пропускается, если переменная не задана, как и в
 test_repository.py.
@@ -123,6 +123,47 @@ class TestCreateApp:
 # ---------------------------------------------------------------------------
 # lifespan + /health
 # ---------------------------------------------------------------------------
+
+class TestAppStartupHasNoSideEffectsInTheProject:
+    """
+    Запуск приложения (lifespan) создаёт папки хранилища. В тестах они должны
+    уходить во временную папку - иначе прогон тестов оставляет data/storage в
+    вашем проекте или создаёт папки по путям из вашего реального .env
+    (а то и пишет рядом с настоящим хранилищем). См. conftest.py.
+    """
+
+    def test_storage_folders_go_to_the_temporary_directory(self, tmp_path):
+        from backend.app import config
+
+        project_storage = config._PROJECT_ROOT / "data" / "storage"
+        existed_before = project_storage.exists()
+
+        app = main_module.create_app()
+        with TestClient(app):
+            assert (tmp_path / "isolated_permanent").is_dir()   # хранилище создано, но во временной папке
+            assert (tmp_path / "isolated_temp").is_dir()
+
+        assert project_storage.exists() == existed_before        # в проекте ничего не появилось
+
+
+class TestStartupCleansExpiredUploads:
+    def test_expired_temp_uploads_are_removed_and_fresh_ones_kept(self, tmp_path):
+        import time
+        import uuid
+
+        temp = tmp_path / "isolated_temp"
+        temp.mkdir()
+        expired, fresh = temp / f"{uuid.uuid4()}.jpg", temp / f"{uuid.uuid4()}.jpg"
+        for path in (expired, fresh):
+            path.write_bytes(b"x")
+        long_ago = time.time() - 3 * 3600
+        os.utime(expired, (long_ago, long_ago))
+
+        with TestClient(main_module.create_app()):
+            pass
+
+        assert not expired.exists() and fresh.exists()
+
 
 class TestHealthCheck:
     def test_degraded_when_database_unreachable(self, monkeypatch):
