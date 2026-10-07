@@ -181,6 +181,36 @@ python ml\detection\check_detector.py --images <папка кадров> --gt-la
 Скрипт вызывает YOLO так же, как `DetectorService`, и печатает итог по каждому варианту (порог, `imgsz`, масштаб) и вывод. В папке `runs\check_detector` остаются `summary.json` и контактные листы `sheet_*.jpg` с рамками (зелёная: достоверность не ниже порога приложения, оранжевая: ниже, синяя: разметка).
 Перебор `imgsz` возможен только для `.pt`: у ONNX размер входа зафиксирован при экспорте.
 
+## Развёртывание (Docker)
+
+Целевая среда: Ubuntu 22.04, Docker Engine с Compose v2. Минимум по ТЗ: 4 ядра CPU, 16 ГБ ОЗУ.
+
+1. **`.env`** в корне проекта (шаблон - `.env.example`): `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB`, `ADMIN_API_KEY` (свой токен администратора). Пароль БД без символов `@ / : ? #`: он входит в URL подключения. Порт интерфейса по умолчанию 8080, меняется через `APP_PORT`.
+2. **Модели** (в git их нет) положите в `ml/detection/exported/vehicle_detector.onnx` и `ml/reid/exported/reid_embedder.onnx`. Они монтируются в контейнер только для чтения.
+3. **Запуск** из корня проекта: `docker compose up -d --build`. Первая сборка долгая (PyTorch и ultralytics), следующие идут из кэша.
+4. **Проверка:** `http://localhost:8080/health` должен вернуть `"status": "ok"`; интерфейс - на `http://localhost:8080`.
+
+| Задача | Команда |
+|---|---|
+| Логи backend | `docker compose logs backend --tail 60` |
+| Остановить (данные сохраняются) | `docker compose down` |
+| Обновить после правки кода | `docker compose up -d --build` |
+| Резервная копия БД | `docker compose exec -T db pg_dump -U <пользователь> -d <база> > backup.sql` |
+
+Данные лежат в томах `pgdata` (БД) и `storage` (изображения наблюдений и временные загрузки) и переживают пересоздание контейнеров. **`docker compose down -v` удаляет их безвозвратно.** Запускайте compose из корня проекта: имя папки задаёт имя проекта, а значит и имена томов.
+
+Backend наружу не публикуется: интерфейс и API доступны через nginx на одном адресе. Замеры быстродействия работают и в этом режиме: `python scripts/benchmark_api.py <кадры> --url http://localhost:8080`.
+
+**GPU-профиль** (ТЗ 1.1.1.2): `docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d --build`. Нужны драйвер NVIDIA и NVIDIA Container Toolkit. Профиль подготовлен, но на оборудовании с GPU не проверялся, поэтому GPU-бюджеты ТЗ (кроп 3 мс, эмбеддинг 100 мс) не измерены.
+
+**Демо-данные (VeRi).** Записи, добавленные `demo_populate_db.py`, хранят пути на файлы датасета на хосте. Чтобы у них отображались изображения в контейнере, смонтируйте датасет в `backend` (`- ./data/VeRi/image_test:/app/data/veri/image_test:ro`) и один раз обновите пути в БД (UPDATE observations
+SET image_path = '/app/data/veri/image_test/' || regexp_replace(image_path, '^.*[\\/]', ''),
+    crop_path  = '/app/data/veri/image_test/' || regexp_replace(crop_path,  '^.*[\\/]', '')
+WHERE image_path NOT LIKE '/app/%';
+
+SELECT image_path FROM observations ORDER BY created_at LIMIT 3;
+SQL). Записи, добавленные через интерфейс, этого не требуют.
+
 ## Конфигурация
 
 - Все настройки - в `.env` в корне проекта; backend находит его независимо от

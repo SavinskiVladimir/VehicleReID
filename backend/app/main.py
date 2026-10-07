@@ -100,18 +100,17 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     # --- ML-сервисы - загружаются ОДИН РАЗ здесь, переиспользуются на
     # все последующие запросы через dependencies.py ---
-    detector_service = _load_model("детектор", settings.detector_model_path, lambda: DetectorService(
+    detector_args = dict(
         model_path=settings.detector_model_path,
         confidence_threshold=settings.detector_confidence_threshold,
         iou_threshold=settings.detector_iou_threshold,
         device=settings.device,
         padding_fraction=settings.padding_fraction,
-    ))
+    )
+    detector_service = _load_model("детектор", settings.detector_model_path, lambda: DetectorService(**detector_args))
     image_service = ImageService(image_size=settings.reid_image_size)
-    embedder_service = _load_model("ReID-экстрактор", settings.reid_model_path, lambda: ReIDEmbedderService(
-        model_path=settings.reid_model_path, device=settings.device,
-        intra_op_threads=settings.reid_intra_op_threads,
-    ))
+    embedder_args = dict(model_path=settings.reid_model_path, device=settings.device)
+    embedder_service = _load_model("ReID-экстрактор", settings.reid_model_path, lambda: ReIDEmbedderService(**embedder_args))
     search_service = SearchService(image_service=image_service, embedder=embedder_service)
 
     # Размерность эмбеддинга модели должна совпасть со схемой БД -

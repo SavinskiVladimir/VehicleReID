@@ -1,0 +1,21 @@
+# GPU-профиль (ТЗ 1.1.1.2). Запуск:
+#   docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d --build
+# Нужны: драйвер NVIDIA и NVIDIA Container Toolkit на хосте.
+services:
+  backend:
+    image: vehicle-reid-backend:gpu          # отдельный тег, чтобы не затирать CPU-образ
+    build:
+      args:
+        # Индекс CUDA-сборки PyTorch под ваш драйвер (cu126, cu128 и т.д., смотрите pytorch.org).
+        # torch с CUDA нужен ультралитикс: без него он игнорирует GPU даже при onnxruntime-gpu.
+        TORCH_INDEX_URL: https://download.pytorch.org/whl/cu126
+        ORT_PACKAGE: onnxruntime-gpu
+    environment:
+      DEVICE: cuda
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]

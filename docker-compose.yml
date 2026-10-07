@@ -22,5 +22,47 @@ services:
       timeout: 5s
       retries: 10
 
+  backend:
+    build:
+      context: .                      # корень проекта: в образ нужны backend/, db/, constraints.txt
+      dockerfile: backend/Dockerfile
+    image: vehicle-reid-backend
+    restart: unless-stopped
+    environment:
+      # Внутри сети compose БД доступна по имени сервиса и ВНУТРЕННЕМУ порту 5432 (POSTGRES_PORT - это только
+      # внешний порт на хосте). Пароль не должен содержать символов @ / : ? # - он входит в URL подключения.
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+      ADMIN_API_KEY: ${ADMIN_API_KEY:-change-me-in-production}
+      DEVICE: ${DEVICE:-cpu}
+      # Остальные настройки (см. .env.example) при необходимости добавляются сюда строкой вида
+      #   DETECTOR_CONFIDENCE_THRESHOLD: ${DETECTOR_CONFIDENCE_THRESHOLD:-0.4}
+    volumes:
+      # Модели в образ не входят: монтируются только для чтения (в git их нет).
+      - ./ml/detection/exported:/app/ml/detection/exported:ro
+      - ./ml/reid/exported:/app/ml/reid/exported:ro
+      # Изображения наблюдений и временные загрузки: переживают пересоздание контейнера.
+      - storage:/app/data/storage
+      # Изображения из хранилища данных
+      - ./data/VeRi/image_test:/app/data/veri/image_test:ro
+    depends_on:
+      db:
+        condition: service_healthy
+    # Порт backend наружу НЕ публикуется: интерфейс и API доступны через frontend (nginx) на одном адресе.
+    # Для отладки (Swagger на /docs) можно временно включить:
+    # ports:
+    #   - "8000:8000"
+
+  frontend:
+    build:
+      context: ./frontend
+    image: vehicle-reid-frontend
+    restart: unless-stopped
+    ports:
+      - "${APP_PORT:-8080}:80"
+    depends_on:
+      backend:
+        condition: service_healthy    # интерфейс стартует, когда backend загрузил модели и отвечает
+
 volumes:
   pgdata:
+  storage:

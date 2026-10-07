@@ -1,0 +1,18 @@
+# Контекст сборки backend - весь корень проекта, поэтому исключается всё, что не нужно образу
+# (иначе в демон уходили бы гигабайты датасетов, чекпоинтов и node_modules, а секреты - в слои).
+.git
+.github
+.venv
+.pytest_cache
+**/__pycache__
+**/*.pyc
+.env
+data
+runs
+ml
+tests
+frontend
+google_colab_version
+*.ipynb
+*.pt
+*.onnx
