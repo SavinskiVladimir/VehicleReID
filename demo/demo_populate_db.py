@@ -1,9 +1,10 @@
 """
 ДЕМОНСТРАЦИОННЫЙ скрипт. Для штатного пополнения базы используйте
-scripts/ingest_images.py: он проходит полный путь (детектор, постоянное хранилище,
-учёт загруженного, откат при сбоях). Этот скрипт упрощён намеренно: пишет в БД
-пути НА ИСХОДНЫЕ ФАЙЛЫ датасета, без копирования в хранилище и без защиты
-от дубликатов.
+scripts/ingest_images.py (детектор, постоянное хранилище, откат при сбоях;
+остановка и продолжение там тоже поддерживаются). Этот скрипт проще: пишет в БД
+пути НА ИСХОДНЫЕ ФАЙЛЫ датасета, без копирования в хранилище и без учёта в
+таблице ingest_sources. Остановку и продолжение он поддерживает, уже
+загруженные изображения определяются по пути файла (observation_exists).
 
 Наполняет базу данных "галереей" для визуальной демонстрации поиска:
 берёт N изображений из data/VeRi/image_test (gallery-сплит VeRi-776,
@@ -60,7 +61,23 @@ def parse_args() -> argparse.Namespace:
                          help="Удалить все текущие записи из базы перед заполнением "
                               "(иначе новые изображения добавляются поверх существующих)")
 
+    parser.add_argument("--split", type=str, default="image_test",
+                         choices=["image_test", "image_train", "image_query"],
+                         help="Какую часть VeRi-776 загружать: image_test (gallery), image_train "
+                              "(обучающая, около 37 тыс.), image_query (1678)")
+    parser.add_argument("--store-prefix", type=str, default=None,
+                         help="Префикс путей, которые записываются в БД, вместо абсолютного пути на "
+                              "хосте. Для Docker: /app/data/veri - изображения будут отображаться в "
+                              "контейнере без правки путей в БД")
+
     return parser.parse_args()
+
+
+def stored_path(path: str, args: argparse.Namespace) -> str:
+    """Путь, под которым изображение записывается в БД (и по которому определяется, что оно уже загружено)."""
+    if args.store_prefix:
+        return f"{args.store_prefix.rstrip('/')}/{args.split}/{os.path.basename(path)}"
+    return os.path.abspath(path)
 
 
 async def main() -> None:
@@ -74,7 +91,7 @@ async def main() -> None:
             "Проверьте, что .env лежит в корне проекта и содержит DATABASE_URL."
         )
 
-    gallery_dir = os.path.join(args.veri_root, "image_test")
+    gallery_dir = os.path.join(args.veri_root, args.split)
     if not os.path.isdir(gallery_dir):
         raise FileNotFoundError(f"Не найдена папка {gallery_dir}")
 
@@ -111,30 +128,50 @@ async def main() -> None:
             print("База очищена.")
 
         added = 0
+
+        # Первый проход: определяем, какие изображения уже есть в БД.
+        print("Проверяю существующие изображения...")
+
+        new_images = []
+
         for path in selected:
+            image_path = stored_path(path, args)
+
+            if await repository.observation_exists(session, image_path):
+                continue
+
+            new_images.append(path)
+
+        skipped = len(selected) - len(new_images)
+
+        print(f"Пропускаю {skipped} уже существующих изображений.")
+        print(f"Начинаю загрузку {len(new_images)} новых изображений...")
+
+        # Второй проход: обрабатываем только новые изображения.
+        for path in new_images:
             image = Image.open(path).convert("RGB")
             preprocessed = image_service.preprocess(image)
             embedding = embedder.embed_as_list(preprocessed)
 
-            # Для демо-базы crop_path = image_path = исходный файл VeRi-776
-            # (само изображение УЖЕ кроп, отдельно хранить нечего).
-            # bbox записываем как полный размер изображения - честно
-            # отражает то, что в исходном файле нет отдельного шага
-            # детекции.
+            image_path = stored_path(path, args)
+
             await repository.add_observation(
                 session,
-                image_path=os.path.abspath(path),
-                crop_path=os.path.abspath(path),
+                image_path=image_path,
+                crop_path=image_path,
                 bbox=(0, 0, image.width, image.height),
                 embedding=embedding,
             )
+
             added += 1
+
             if added % 50 == 0:
-                print(f"  Добавлено {added}/{len(selected)}...")
+                print(f"  Добавлено {added}/{len(new_images)}...")
 
     await engine.dispose()
     print()
     print(f"Готово. В базу добавлено {added} изображений.")
+    print(f"Пропущено уже существующих: {skipped}.")
 
 
 if __name__ == "__main__":

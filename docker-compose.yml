@@ -44,6 +44,7 @@ services:
       - storage:/app/data/storage
       # Изображения из хранилища данных
       - ./data/VeRi/image_test:/app/data/veri/image_test:ro
+      - ./data/VeRi/image_train:/app/data/veri/image_train:ro
     depends_on:
       db:
         condition: service_healthy
