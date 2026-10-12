@@ -29,6 +29,9 @@ export function extractErrorMessage(error) {
   if (!error.response) {
     return "Не удалось связаться с сервером. Проверьте подключение.";
   }
+  if (error.response?.status === 413) {
+    return "Файл слишком большой. Максимальный размер — 10 МБ.";
+  }
   return "Произошла непредвиденная ошибка.";
 }
 
