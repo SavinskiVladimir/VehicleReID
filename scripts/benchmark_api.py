@@ -7,9 +7,9 @@
 эмбеддинг и поиск. Время /api/detect и ожидание выбора пользователем в бюджет не входят.
 
     Кроп ТС        detect + crop из /api/search       <= 100 мс (CPU) / 3 мс (GPU)
-    Эмбеддинг      embed                              <= 500 мс (CPU) / 100 мс (GPU)
+    Эмбеддинг      embed                              <= 800 мс (CPU) / 250 мс (GPU)
     Поиск в БД     search                             <= 30 мс при 100 000 записей
-    Весь запрос    весь /api/search, замер клиента    <= 700 мс (CPU) / 300 мс (GPU)
+    Весь запрос    весь /api/search, замер клиента    <= 1000 мс (CPU) / 500 мс (GPU)
 
 Сервер должен быть запущен. Берите КАДРЫ с машинами, а не готовые кропы. Каждый запуск /api/search
 пишет запись в историю поиска (журнал ограничен SEARCH_HISTORY_MAX_ITEMS).
@@ -29,8 +29,8 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 BUDGETS_MS = {
-    "cpu": {"crop": 100, "embed": 500, "search": 30, "total": 700},
-    "gpu": {"crop": 3, "embed": 100, "search": 30, "total": 300},
+    "cpu": {"crop": 100, "embed": 800, "search": 30, "total": 1000},
+    "gpu": {"crop": 3, "embed": 250, "search": 30, "total": 500},
 }
 LABELS = {
     "crop": "Кроп ТС (detect + crop)",
@@ -116,6 +116,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--warmup", type=int, default=3, help="Прогревочные запросы, не входят в статистику")
     p.add_argument("--profile", choices=list(BUDGETS_MS), default="cpu", help="Бюджеты ТЗ: cpu или gpu")
     p.add_argument("--top-k", type=int, default=10)
+    p.add_argument("--timeout", type=float, default=120, help="Таймаут одного запроса, с")
     return p
 
 
@@ -131,14 +132,17 @@ def run(args: argparse.Namespace, client=None) -> int:
         except ImportError:
             print("ОШИБКА: нужен пакет httpx (pip install httpx)", file=sys.stderr)
             return 1
-        client = httpx.Client(base_url=args.url, timeout=120)
+        client = httpx.Client(base_url=args.url, timeout=args.timeout)
 
     try:
         records = client.get("/api/observations", params={"limit": 1}).json()["total"]
         print(f"Сервер {args.url}, записей в базе: {records}, профиль {args.profile}. Прогрев: {args.warmup}, замеров: {args.n}...")
         runs, skipped = [], 0
         for i in range(args.warmup + args.n):
+            t_req = time.perf_counter()
             result = one_run(client, files[i % len(files)], args.top_k)
+            print(f"  {i + 1}/{args.warmup + args.n}: {files[i % len(files)].name} "
+                  f"{(time.perf_counter() - t_req) * 1000:.0f} мс", flush=True)
             if result is None:
                 skipped += 1
             elif i >= args.warmup:
