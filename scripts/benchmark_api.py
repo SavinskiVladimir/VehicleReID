@@ -117,6 +117,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--profile", choices=list(BUDGETS_MS), default="cpu", help="Бюджеты ТЗ: cpu или gpu")
     p.add_argument("--top-k", type=int, default=10)
     p.add_argument("--timeout", type=float, default=120, help="Таймаут одного запроса, с")
+    p.add_argument("--insecure", action="store_true", help="Не проверять TLS-сертификат")
     return p
 
 
@@ -132,7 +133,7 @@ def run(args: argparse.Namespace, client=None) -> int:
         except ImportError:
             print("ОШИБКА: нужен пакет httpx (pip install httpx)", file=sys.stderr)
             return 1
-        client = httpx.Client(base_url=args.url, timeout=args.timeout)
+        client = httpx.Client(base_url=args.url, timeout=args.timeout, verify=not args.insecure)
 
     try:
         records = client.get("/api/observations", params={"limit": 1}).json()["total"]
