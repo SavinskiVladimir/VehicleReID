@@ -164,7 +164,7 @@ export default function SearchPage() {
             </div>
           </div>
 
-          <ResultsGrid results={searchResponse.results} />
+          <ResultsGrid results={searchResponse.results} queryId={searchResponse.query_id} />
         </div>
       )}
 

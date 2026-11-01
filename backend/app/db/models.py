@@ -20,7 +20,7 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from pgvector.sqlalchemy import Vector
-from sqlalchemy import DateTime, Float, Integer, String
+from sqlalchemy import DateTime, Float, ForeignKey, Integer, String, UniqueConstraint
 from sqlalchemy.dialects.postgresql import ARRAY, UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -173,3 +173,33 @@ class IngestSource(Base):
 
     def __repr__(self) -> str:
         return f"<IngestSource {self.source_hash[:12]} observations={len(self.observation_ids)}>"
+
+class Feedback(Base):
+    """
+    Отметка оператора о результате поиска (функция 10 ТЗ): «совпадение» / «не совпадение»
+    для пары (запрос из журнала поиска, кандидат-наблюдение).
+
+    Вектор и кроп запроса хранятся В САМОЙ отметке (снимок): журнал поиска ограничен по размеру
+    и чистится, а отметки - это данные для дообучения модели, они должны его пережить.
+    """
+
+    __tablename__ = "feedback"
+    __table_args__ = (UniqueConstraint("query_id", "candidate_id", name="uq_feedback_pair"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    query_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("search_queries.id", ondelete="SET NULL"), nullable=True
+    )
+    candidate_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("observations.id", ondelete="CASCADE"), nullable=False
+    )
+    label: Mapped[str] = mapped_column(String(16), nullable=False)  # "match" | "no_match"
+    operator_id: Mapped[str] = mapped_column(String, nullable=False)
+    query_embedding: Mapped[list] = mapped_column(Vector(EMBEDDING_DIM), nullable=False)
+    query_crop_path: Mapped[str] = mapped_column(String, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False
+    )

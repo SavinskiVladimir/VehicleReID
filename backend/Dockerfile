@@ -31,7 +31,10 @@ WORKDIR /app
 # Версии torch/torchvision берутся из constraints.txt (те же, на которых проходят тесты).
 COPY constraints.txt ./constraints.txt
 COPY backend/requirements.txt ./requirements.txt
-RUN pip install $(grep -E '^(torch|torchvision)==' constraints.txt | tr '\n' ' ') --index-url ${TORCH_INDEX_URL} \
+#RUN pip install $(grep -E '^(torch|torchvision)==' constraints.txt | tr '\n' ' ') --index-url ${TORCH_INDEX_URL} \
+#    && pip install -r requirements.txt -c constraints.txt
+COPY wheels /wheels
+RUN pip install $(grep -E '^(torch|torchvision)==' constraints.txt | tr '\n' ' ') --find-links /wheels \
     && pip install -r requirements.txt -c constraints.txt
 
 # GPU-профиль: onnxruntime-gpu заменяет обычный onnxruntime (это один и тот же модуль, вместе их держать нельзя).

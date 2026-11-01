@@ -101,3 +101,23 @@ export async function clearSearchHistory(adminToken) {
   const { data } = await api.delete("/search-history", { headers: { "X-Admin-Token": adminToken } });
   return data; // { deleted: N }
 }
+
+export async function getFeedback(queryId) {
+  const { data } = await api.get(`/search-history/${queryId}/feedback`);
+  return data.items; // [{ candidate_id, label, operator_id, ... }]
+}
+
+export async function setFeedback(queryId, candidateId, label, token) {
+  await api.put(
+    "/feedback",
+    { query_id: queryId, candidate_id: candidateId, label },
+    { headers: { "X-Admin-Token": token } }
+  );
+}
+
+export async function removeFeedback(queryId, candidateId, token) {
+  await api.delete("/feedback", {
+    params: { query_id: queryId, candidate_id: candidateId },
+    headers: { "X-Admin-Token": token },
+  });
+}

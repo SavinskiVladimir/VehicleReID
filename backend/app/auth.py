@@ -48,3 +48,26 @@ async def require_admin(request: Request, x_admin_token: str = Header(...)) -> N
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Недостаточно прав для выполнения этой операции.",
         )
+
+def _parse_operator_tokens(raw: str):
+    pairs = []
+    for item in (raw or "").split(","):
+        name, sep, token = item.strip().partition(":")
+        if sep and name.strip() and token.strip():
+            pairs.append((name.strip(), token.strip()))
+    return pairs
+
+
+async def require_operator(request: Request, x_admin_token: str = Header(...)) -> str:
+    """Право ставить отметки оператора (функция 10 ТЗ). Возвращает идентификатор оператора."""
+    settings = request.app.state.settings
+    provided = x_admin_token.encode("utf-8")
+    if secrets.compare_digest(provided, settings.admin_api_key.encode("utf-8")):
+        return "admin"
+    for name, token in _parse_operator_tokens(settings.operator_tokens):
+        if secrets.compare_digest(provided, token.encode("utf-8")):
+            return name
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="Недостаточно прав для выполнения этой операции.",
+    )

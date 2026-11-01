@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
-from typing import List, Optional, Tuple
+from typing import List, Literal, Optional, Tuple
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -178,3 +178,22 @@ class SearchHistoryResponse(BaseModel):
     total: int
     limit: int
     offset: int
+
+    
+class FeedbackSet(BaseModel):
+    query_id: uuid.UUID
+    candidate_id: uuid.UUID
+    label: Literal["match", "no_match"]
+
+
+class FeedbackOut(BaseModel):
+    query_id: Optional[uuid.UUID] = None
+    candidate_id: uuid.UUID
+    label: str
+    operator_id: str
+    created_at: datetime
+    updated_at: datetime
+
+
+class FeedbackListResponse(BaseModel):
+    items: List[FeedbackOut]

@@ -22,7 +22,9 @@ from typing import List, Sequence, Tuple
 from sqlalchemy import delete, func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from .models import IngestSource, Observation, SearchQuery
+from datetime import datetime, timezone
+
+from .models import Feedback, IngestSource, Observation, SearchQuery
 
 
 async def add_observation(
@@ -330,3 +332,50 @@ async def delete_observations_by_ids(
     )).all()
     await session.execute(delete(Observation).where(Observation.id.in_(ids)))
     return [(r[0], r[1]) for r in rows]
+
+
+async def get_feedback_snapshot(session: AsyncSession, query_id: uuid.UUID) -> Feedback | None:
+    """Любая отметка этого запроса: из неё берётся уже сохранённый снимок запроса."""
+    stmt = select(Feedback).where(Feedback.query_id == query_id).limit(1)
+    return (await session.execute(stmt)).scalars().first()
+
+
+async def list_feedback_for_query(session: AsyncSession, query_id: uuid.UUID) -> List[Feedback]:
+    stmt = select(Feedback).where(Feedback.query_id == query_id)
+    return list((await session.execute(stmt)).scalars().all())
+
+
+async def upsert_feedback(
+    session: AsyncSession,
+    query_id: uuid.UUID,
+    candidate_id: uuid.UUID,
+    label: str,
+    operator_id: str,
+    query_embedding: Sequence[float],
+    query_crop_path: str,
+) -> Feedback:
+    """Ставит отметку или меняет существующую для пары (запрос, кандидат)."""
+    stmt = select(Feedback).where(Feedback.query_id == query_id, Feedback.candidate_id == candidate_id)
+    row = (await session.execute(stmt)).scalars().first()
+    if row is None:
+        row = Feedback(
+            query_id=query_id, candidate_id=candidate_id, label=label, operator_id=operator_id,
+            query_embedding=list(query_embedding), query_crop_path=query_crop_path,
+        )
+        session.add(row)
+    else:
+        row.label = label
+        row.operator_id = operator_id
+        row.updated_at = datetime.now(timezone.utc)
+    await session.commit()
+    await session.refresh(row)
+    return row
+
+
+async def delete_feedback(session: AsyncSession, query_id: uuid.UUID, candidate_id: uuid.UUID) -> bool:
+    """Снимает отметку. False, если такой отметки не было."""
+    result = await session.execute(
+        delete(Feedback).where(Feedback.query_id == query_id, Feedback.candidate_id == candidate_id)
+    )
+    await session.commit()
+    return result.rowcount > 0

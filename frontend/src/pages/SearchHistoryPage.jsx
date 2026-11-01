@@ -136,7 +136,7 @@ export default function SearchHistoryPage() {
           </div>
         </div>
 
-        <ResultsGrid results={rerun.response.results} />
+        <ResultsGrid results={rerun.response.results} queryId={rerun.response.query_id} />
       </div>
     );
   }

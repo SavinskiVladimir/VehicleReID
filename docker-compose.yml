@@ -33,6 +33,7 @@ services:
       # внешний порт на хосте). Пароль не должен содержать символов @ / : ? # - он входит в URL подключения.
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
       ADMIN_API_KEY: ${ADMIN_API_KEY:-change-me-in-production}
+      OPERATOR_TOKENS: ${OPERATOR_TOKENS:-}
       DEVICE: ${DEVICE:-cpu}
       # Остальные настройки (см. .env.example) при необходимости добавляются сюда строкой вида
       #   DETECTOR_CONFIDENCE_THRESHOLD: ${DETECTOR_CONFIDENCE_THRESHOLD:-0.4}

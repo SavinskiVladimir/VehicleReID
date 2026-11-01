@@ -56,3 +56,31 @@
   background: var(--mist);
   border-radius: var(--radius-md);
 }
+
+.result-card__feedback {
+  display: flex;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.result-card__mark {
+  flex: 1;
+  padding: 5px 0;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--paper);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.result-card__mark--match.is-active {
+  background: #dff3e4;
+  border-color: #2f8f4e;
+  color: #1d6a37;
+}
+
+.result-card__mark--no_match.is-active {
+  background: #fbe3e3;
+  border-color: #c0392b;
+  color: #8f2a20;
+}
